@@ -50,4 +50,26 @@
 
 uint8_t getNumFromBits(int numArrays, uint8_t* arrays[], int sizes[]);
 
+// Compute a very cheap rolling checksum over the first K words
+static inline uint32_t dsum32(const uint32_t *p, uint32_t words)
+{
+    uint32_t s = 0;
+    for (uint32_t i = 0; i < words; ++i) s = (s << 5) - s + p[i]; // s = s*31 + word
+    return s;
+}
+
+static inline void ddump_head(const char* tag, const uint32_t* p, uint32_t words)
+{
+    const uint32_t n = (words < 8u) ? words : 8u;
+    printf("%s @%p: ", tag, (void*)p);
+    for (uint32_t i = 0; i < n; ++i) printf("%08X ", p[i]);
+    printf("...  (sum=%08X)\n", dsum32(p, n));
+}
+
+#define CHECK_RESULT(eResult) \
+        if(eResult != 0)\
+		{\
+			return (1);\
+        }
+
 #endif /* SHAREDCONFIG_H_ */

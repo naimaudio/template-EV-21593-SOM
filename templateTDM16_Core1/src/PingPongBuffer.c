@@ -26,6 +26,14 @@ bidirectionalStream spdifStream;
 bidirectionalStream globalStream;
 
 
+static inline void* to_uncached(void* p)
+{
+    // For ADSP-2159x/SC59x L2: set the uncached alias bit(s).
+    // Your memory map shows 0x0024_---- becoming 0x2824_---- (i.e., OR with 0x2800_0000).
+    return (void*)((uintptr_t)p | 0x28000000u);
+}
+
+
 void initPingPongBuffer(PingPong* pingPong, uint32_t* ping, uint32_t* pong, FIRST_BUFFER firstBuffer, uint32_t numberOfChannels)
 {
 	if (!pingPong || !ping || !pong) return;
@@ -55,7 +63,7 @@ void initPingPongBuffer(PingPong* pingPong, uint32_t* ping, uint32_t* pong, FIRS
 
 	pingPong->dmaDescriptorPing.pStartAddr = pingPong->ping;
 	pingPong->dmaDescriptorPing.pNxtDscp   = &pingPong->dmaDescriptorPong;
-	pingPong->dmaDescriptorPing.Config     = ENUM_DMA_CFG_XCNT_INT | ENUM_DMA_CFG_WRITE;     /* use your actual PDMA config bits */
+	pingPong->dmaDescriptorPing.Config     = ENUM_DMA_CFG_XCNT_INT;     /* use your actual PDMA config bits */
 	pingPong->dmaDescriptorPing.XCount     = (uint32_t)wordsPerBuffer;  /* elements, not bytes */
 	pingPong->dmaDescriptorPing.XModify    = sizeof(int);                         /* contiguous elements */
 	pingPong->dmaDescriptorPing.YCount     = 0;

@@ -18,9 +18,9 @@
 
 #define SAMPLES_PER_BLOCK 128u
 
-#define SLOTS_TX     		12u//12
-#define SLOTS_RX     		4u//4
-#define SLOTS_SPDIF  		2u//2
+#define SLOTS_TX     		12u
+#define SLOTS_RX     		4u
+#define SLOTS_SPDIF  		2u
 #define TX_WORDS     		(SLOTS_TX * SAMPLES_PER_BLOCK)
 #define RX_WORDS     		(SLOTS_RX * SAMPLES_PER_BLOCK)
 #define SPDIF_WORDS  		(SLOTS_SPDIF * SAMPLES_PER_BLOCK)

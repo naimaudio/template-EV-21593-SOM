@@ -5,8 +5,7 @@
  *      Author: t.cleton
  */
 
-#include "SharedConfig.h"
-
+#include "sharedConfig.h"
 
 uint8_t getNumFromBits(int numArrays, uint8_t* arrays[], int sizes[]) {
 	// this function takes any number of arrays (numArrays), each array contains a certain number of bits given in the sizes array

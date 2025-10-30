@@ -11,13 +11,18 @@ extern uint8_t memorySport4ATx[ADI_SPORT_MEMORY_SIZE];
 extern uint8_t memorySport4BRx[ADI_SPORT_MEMORY_SIZE];
 
 // SPDIF
-#define SpdifDeviceNum  0u //
+#define SportDeviceNum0  0u //
+extern uint8_t memorySport0ATx[ADI_SPORT_MEMORY_SIZE];
+extern uint8_t memorySport0BRx[ADI_SPORT_MEMORY_SIZE];
+
+#define SpdifDeviceNum0  0u //
 extern uint8_t memorySpdifRx[ADI_SPDIF_RX_MEMORY_SIZE];
 extern uint8_t memorySpdifTx[ADI_SPDIF_TX_MEMORY_SIZE];
 
 // functions
 
 void SportCallback(void *pAppHandle, uint32_t event, void *pArg);
-int sport_init(void);
+int jackSportInit(void);
+int spdifSportInit(void);
 
 #endif /* SPORTCONFIG_H_ */

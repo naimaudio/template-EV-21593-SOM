@@ -42,7 +42,6 @@ static void softcfg_delay_ms(uint32_t ms)
     while (loops--) { __asm__ __volatile__("nop;"); }
 }
 
-
 int Soft_resetAudio(void)
 {
     if (TwiSetAddr(I2cAddrSOFTConfig) != APP_SUCCESS) return APP_FAILED;
@@ -72,7 +71,6 @@ int Soft_resetAudio(void)
     return APP_SUCCESS;
 }
 
-
 int Soft_init(void)
 {
     // 1) Set directions
@@ -91,5 +89,9 @@ int Soft_init(void)
     if (TwiWrite8(REG_GPIOA, GPIOA_RELEASE_RST) != 0) return 1;
     softcfg_delay_ms(5);
 
+    // CURRENT (coaxial enabled):
+    if (TwiWrite8(REG_GPIOB, 0xFD) != 0) return 1;
+    // optical
+    //if (TwiWrite8(REG_GPIOB, 0xFB) != 0) return 1;
     return 0; // success
 }

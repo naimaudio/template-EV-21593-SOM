@@ -12,16 +12,27 @@
 #include <string.h>
 #include "PingPongBuffer.h"
 #include <sys/platform.h>
+#include <services/pcg/adi_pcg.h>
+#include "sharedConfig.h"   /* for FS */
 
-static ADI_SPORT_HANDLE handleSport4ATx = NULL;   /* SPORT4A, Tx transmit data to the dac*/
-static ADI_SPORT_HANDLE handleSport4BRx = NULL;   /* SPORT4B, Rx receive data from the adc */
-uint8_t memorySport4ATx[ADI_SPORT_MEMORY_SIZE];
-uint8_t memorySport4BRx[ADI_SPORT_MEMORY_SIZE];
+/* ===== SPORT handles and driver memory ===== */
+/* SPORT4: jacks (TDM16) */
+static ADI_SPORT_HANDLE 	handleSport4ATx = NULL;  /* SPORT4A -> DAC (TX) */
+static ADI_SPORT_HANDLE 	handleSport4BRx = NULL;  /* SPORT4B <- ADC (RX) */
+static uint8_t          	memorySport4ATx[ADI_SPORT_MEMORY_SIZE];
+static uint8_t          	memorySport4BRx[ADI_SPORT_MEMORY_SIZE];
 
-static ADI_SPDIF_RX_HANDLE handleSpdifRx = NULL;
-static ADI_SPDIF_TX_HANDLE handleSpdifTx = NULL;
-uint8_t memorySpdifRx[ADI_SPDIF_RX_MEMORY_SIZE];
-uint8_t memorySpdifTx[ADI_SPDIF_TX_MEMORY_SIZE];
+/* SPORT0: S/PDIF (I2S 2-ch) */
+static ADI_SPORT_HANDLE		handleSport0ATx = NULL;  /* SPORT0A -> SPDIF_TX (TX) */
+static ADI_SPORT_HANDLE 	handleSport0BRx = NULL;  /* SPORT0B <- SPDIF_RX (RX) */
+static uint8_t          	memorySport0ATx[ADI_SPORT_MEMORY_SIZE];
+static uint8_t          	memorySport0BRx[ADI_SPORT_MEMORY_SIZE];
+
+/* ===== S/PDIF peripheral handles and driver memory ===== */
+static ADI_SPDIF_RX_HANDLE	handleSpdifRx = NULL;
+static ADI_SPDIF_TX_HANDLE	handleSpdifTx = NULL;
+static uint8_t				memorySpdifRx[ADI_SPDIF_RX_MEMORY_SIZE];
+static uint8_t				memorySpdifTx[ADI_SPDIF_TX_MEMORY_SIZE];
 
 #define CHECK_RESULT(eResult) \
         if(eResult != 0)\
@@ -85,38 +96,6 @@ static void printEvent(uint32_t event)
     }
 }
 
-void SportCallback(void *pAppHandle, uint32_t event, void *pArg)
-{
-	//printEvent(event);
-    switch (event)
-    {
-    case ADI_SPORT_EVENT_RX_BUFFER_PROCESSED:
-    	//printf("ok");
-        // JACK RX completed: publish a fresh block for the CPU
-        if (pAppHandle == handleSport4BRx) {
-        	//printf("flipping jackStream.Rx and set True\n");
-            flipPingPong(&jackStream.Rx);          // wrote half becomes readPtr
-            jackStream.Rx.isFreshData = true;      // CPU can consume once
-            //printPingPongStates();
-        }
-        break;
-
-    case ADI_SPORT_EVENT_TX_BUFFER_PROCESSED:
-        // JACK TX completed: SPORT (the consumer) just finished reading
-        if (pAppHandle == handleSport4ATx) {
-        	//printf("flipping jackStream.Tx and set false\n");
-            flipPingPong(&jackStream.Tx);          // read half becomes writePtr
-            jackStream.Tx.isFreshData = false;     // no fresh data for SPORT now
-        }
-        break;
-
-    default:
-    	//printPingPongStates();//printEvent(event);//debug
-        break;
-    }
-}
-
-
 static inline int _chk(const char* what, ADI_SPORT_RESULT r)
 {
     if (r != ADI_SPORT_SUCCESS && r != ADI_SPORT_TRANSFER_IN_PROGRESS) {
@@ -126,28 +105,51 @@ static inline int _chk(const char* what, ADI_SPORT_RESULT r)
     return APP_SUCCESS;
 }
 
-int spdif_init(void)
+void SportCallback(void *pAppHandle, uint32_t event, void *pArg)
 {
-	ADI_SPDIF_RX_RESULT    rxResult;
-	ADI_SPDIF_TX_RESULT    txResult;
-
-	rxResult=adi_spdif_Rx_Open(SpdifDeviceNum,memorySpdifRx,ADI_SPDIF_RX_MEMORY_SIZE,&handleSpdifRx);
-	CHECK_RESULT(rxResult);
-	rxResult=adi_spdif_Rx_Enable(handleSpdifRx,true);
-	CHECK_RESULT(rxResult);
-
-	txResult=adi_spdif_Tx_Open(SpdifDeviceNum,memorySpdifTx,ADI_SPDIF_TX_MEMORY_SIZE,&handleSpdifTx);
-	CHECK_RESULT(txResult);
-	txResult = adi_spdif_Tx_SetSerialMode(handleSpdifTx, ADI_SPDIF_TX_INPUT_FMT_LEFT_JUSTIFIED);
-	CHECK_RESULT(txResult);
-	txResult = adi_spdif_Tx_SetFreqMultiplier(handleSpdifTx, ADI_SPDIF_TX_FREQ_MULT_256);
-	txResult=adi_spdif_Tx_Enable(handleSpdifTx,true);
-	CHECK_RESULT(txResult);
-	//txResult = adi_spdif_Tx_ConfigSport();
-	return 0;
+    switch (event)
+    {
+    case ADI_SPORT_EVENT_RX_BUFFER_PROCESSED:
+        if (pAppHandle == handleSport4BRx) {
+            flipPingPong(&jackStream.Rx);          // wrote half becomes readPtr
+            jackStream.Rx.isFreshData = true;      // CPU can consume once
+            //printf("jack Rx\n");
+        }
+        if (pAppHandle == handleSport0BRx) {
+			flipPingPong(&spdifStream.Rx);          // wrote half becomes readPtr
+			spdifStream.Rx.isFreshData = true;      // CPU can consume once
+			//printf("spdif Rx\n");
+		}
+        break;
+    case ADI_SPORT_EVENT_TX_BUFFER_PROCESSED:
+        if (pAppHandle == handleSport4ATx) {
+            flipPingPong(&jackStream.Tx);          // read half becomes writePtr
+            jackStream.Tx.isFreshData = false;     // no fresh data for SPORT now
+            //printf("jack Tx\n");
+        }
+        if (pAppHandle == handleSport0ATx) {
+			flipPingPong(&spdifStream.Tx);          // read half becomes writePtr
+			spdifStream.Tx.isFreshData = false;     // no fresh data for SPORT now
+			//printf("spdif Tx\n");
+		}
+        break;
+    default:
+    	//break;
+    	printEvent(event);//debug
+    	if (pAppHandle == handleSport4BRx) {
+    	    printf("from sport4B RX\n");
+    	} else if (pAppHandle == handleSport4ATx) {
+    	    printf("from sport4A TX\n");
+    	} else if (pAppHandle == handleSport0BRx) {
+    	    printf("from sport0B RX\n");
+    	} else if (pAppHandle == handleSport0ATx) {
+    	    printf("from sport0A TX\n");
+    	}
+        break;
+    }
 }
 
-int sport_init(void)
+int jackSportInit(void)
 {
     ADI_SPORT_RESULT r;
 
@@ -176,13 +178,6 @@ int sport_init(void)
             &handleSport4BRx);
     if (_chk("Open 4B RX", r)) return APP_FAILED;
 
-    //adi_sport_MuxHalfSport(handleSport4BRx, /*bUseOtherFS*/true, /*bUseOtherClk*/true);
-    /* 1) Data format on both halves:
-       - 32-bit slots (SLEN = 31)
-       - MSB-first
-       - RightJustified=false (we're not in RJ; codecs are TDM/LJ)
-       - Pack=false (SPORT word packing disabled; MC "DMAPack" is set separately)
-    */
     r = adi_sport_ConfigData(
             handleSport4ATx,
             ADI_SPORT_DTYPE_SIGN_FILL, /* right-justify sign fill */
@@ -319,3 +314,62 @@ int sport_init(void)
     printf("SPORT initialized (core=%u)\n", (unsigned)adi_core_id());
     return APP_SUCCESS;
 }
+
+int SpdifRxinit(void)
+{
+	ADI_SPDIF_RX_RESULT    eResult;
+
+	eResult=adi_spdif_Rx_Open(SpdifDeviceNum0,memorySpdifRx,ADI_SPDIF_RX_MEMORY_SIZE,&handleSpdifRx);
+    CHECK_RESULT(eResult);
+	eResult=adi_spdif_Rx_Enable(handleSpdifRx,true);
+    CHECK_RESULT(eResult);
+    return 0;
+}
+
+int SpdifTxinit(void)
+{
+	ADI_SPDIF_TX_RESULT    eResult;
+
+	eResult=adi_spdif_Tx_Open(SpdifDeviceNum0,memorySpdifTx,ADI_SPDIF_TX_MEMORY_SIZE,&handleSpdifTx);
+    CHECK_RESULT(eResult);
+	eResult=adi_spdif_Tx_Enable(handleSpdifTx,true);
+    CHECK_RESULT(eResult);
+    return 0;
+
+}
+int spdifSportInit(void)
+{
+	// init spdif
+	SpdifRxinit();
+	SpdifTxinit();
+
+	ADI_SPORT_RESULT    eResult;
+
+    eResult = adi_sport_Open(SportDeviceNum0,ADI_HALF_SPORT_A,ADI_SPORT_DIR_TX, ADI_SPORT_I2S_MODE, memorySport0ATx,ADI_SPORT_MEMORY_SIZE,&handleSport0ATx);
+    CHECK_RESULT(eResult);
+    eResult = adi_sport_Open(SportDeviceNum0,ADI_HALF_SPORT_B,ADI_SPORT_DIR_RX, ADI_SPORT_I2S_MODE, memorySport0BRx,ADI_SPORT_MEMORY_SIZE,&handleSport0BRx);
+    CHECK_RESULT(eResult);
+
+    eResult = adi_sport_DMATransfer(handleSport0ATx,&spdifStream.Tx.dmaDescriptorPing,2 ,ADI_PDMA_DESCRIPTOR_LIST, ADI_SPORT_CHANNEL_PRIM);
+	CHECK_RESULT(eResult);
+    eResult = adi_sport_DMATransfer(handleSport0BRx,&spdifStream.Rx.dmaDescriptorPing,2 ,ADI_PDMA_DESCRIPTOR_LIST, ADI_SPORT_CHANNEL_PRIM);
+	CHECK_RESULT(eResult);
+
+	eResult = adi_sport_RegisterCallback(handleSport0BRx,
+										 SportCallback,
+										 handleSport0BRx);
+	CHECK_RESULT(eResult);
+	eResult = adi_sport_RegisterCallback(handleSport0ATx,
+										 SportCallback,
+										 handleSport0ATx);
+	CHECK_RESULT(eResult);
+
+    eResult = adi_sport_Enable(handleSport0ATx,true);
+    CHECK_RESULT(eResult);
+
+    eResult = adi_sport_Enable(handleSport0BRx,true);
+    CHECK_RESULT(eResult);
+    return 0;
+}
+
+

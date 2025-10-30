@@ -3,18 +3,14 @@
 #include <stdio.h>
 
 /* =========================================================================
- * Build-time option: mark SPORT4A/4B bus transactions as "secure".
- * Set to 0 to keep them non-secure (typical), or 1 to mark secure.
- * ========================================================================= */
-#ifndef SPU_MARK_SPORT4_SECURE
-#define SPU_MARK_SPORT4_SECURE   (1)
-#endif
-/* =========================================================================
  * SPU Source IDs for SPORT4A/4B on ADSP-2159x/SC59x (EV-SOMCRR/SPORT4).
  * These IDs match ADI’s example (SPORT_4A_SPU=71 / SPORT_4B_SPU=72).
  * ========================================================================= */
 #define SPU_SRC_SPORT4A   (71u)
 #define SPU_SRC_SPORT4B   (72u)
+
+#define SPU_SRC_SPORT0A   (63u)
+#define SPU_SRC_SPORT0B   (64u)
 
 /* Local SPU handle and memory */
 static ADI_SPU_HANDLE sSpuHandle = NULL;
@@ -40,17 +36,15 @@ int ConfigureSpu(void)
     /* Set secure/non-secure attribute for SPORT4A/4B masters.
      * ADI’s example toggles the “master secure” bit similarly for its SPORT.
      */
-#if SPU_MARK_SPORT4_SECURE
     r = adi_spu_EnableMasterSecure(sSpuHandle, SPU_SRC_SPORT4A, true);
     if (r != ADI_SPU_SUCCESS) return (int)r;
     r = adi_spu_EnableMasterSecure(sSpuHandle, SPU_SRC_SPORT4B, true);
     if (r != ADI_SPU_SUCCESS) return (int)r;
-#else
-    r = adi_spu_EnableMasterSecure(sSpuHandle, SPU_SRC_SPORT4A, false);
-    if (r != ADI_SPU_SUCCESS) return (int)r;
-    r = adi_spu_EnableMasterSecure(sSpuHandle, SPU_SRC_SPORT4B, false);
-    if (r != ADI_SPU_SUCCESS) return (int)r;
-#endif
+
+    r = adi_spu_EnableMasterSecure(sSpuHandle, SPU_SRC_SPORT0A, true);
+	if (r != ADI_SPU_SUCCESS) return (int)r;
+	r = adi_spu_EnableMasterSecure(sSpuHandle, SPU_SRC_SPORT0B, true);
+	if (r != ADI_SPU_SUCCESS) return (int)r;
 
     return 0;
 }

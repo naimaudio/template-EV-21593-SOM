@@ -10,8 +10,7 @@
 #define APP_SUCCESS             (0)
 #define APP_FAILED              (1)
 
-int Soft_FindExpanderAddr(uint8_t *found);
-uint8_t getNumFromBits(int numArrays, uint8_t* arrays[], int sizes[]);
+void prepareToPlay(void);
 void processBlock(void);
 
 #endif /* __TEMPLATETDM16_CORE1_H__ */

@@ -37,10 +37,10 @@ void writePLL_CONTROL(void) {
     ADI_TWI_RESULT r = TwiWrite8(ADAU1979_PLL_CONTROL, word);
 
 	if (r == ADI_TWI_FAILURE){ printf("ADAU1979_PLL_CONTROL write failed"); }
-	/*
+	//*
 	uint8_t word2 = TwiRead8(ADAU1979_PLL_CONTROL);
 	printf("ADAU1979_PLL_CONTROL should be 0x%02X and it is 0x%02X\n", word, word2);
-	*/
+	//*/
 }
 
 void writeBLOCK_POWER_SAI(void) {

@@ -36,10 +36,10 @@ void writePLL_CLK_CTRL1(void) {
     uint8_t word = getNumFromBits(numArrays, arrays, sizes);
     ADI_TWI_RESULT r = TwiWrite8(ADAU1962_PLL_CLK_CTRL1, word);
     if (r == ADI_TWI_FAILURE){ printf("PLL_CLK_CTRL1 write failed"); }
-    /*
+    //*
 	uint8_t word2 = TwiRead8(ADAU1962_PLL_CLK_CTRL1);
 	printf("PLL_CLK_CTRL1 should be 0x%02X and it is 0x%02X\n", word, word2);
-	*/
+	//*/
 }
 
 void writePDN_THRMSENS_CTRL_1(void) {

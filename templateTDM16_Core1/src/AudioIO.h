@@ -63,8 +63,13 @@ void AudioIO_applyConfiguration(void);
 
 /* Merge SPORT4B RX (AN1..AN4) into the unified input buffer. COAX inputs
    are reserved but currently zero-filled (we'll wire SPDIF later). */
+void fillGlobalInput(void);
+void fillOutputsFromGlobal(void);
+
+
 void fillGlobalInputFromAN(void);
+void fillGlobalInputFromSpdif(void);
 /* Scatter the unified output buffer to SPORT4A TX (DAC1..12) */
 void fillDACOutputFromGlobal(void);
-void fillSpdifFromOutputBuffer(void);
+void fillSpdifOutputFromGlobal(void);
 #endif /* AUDIOIO_H_ */
