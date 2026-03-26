@@ -37,6 +37,53 @@ extern volatile bool     dbgRxCaptured;
 extern volatile uint32_t dbgTxHead[24];
 extern volatile bool     dbgTxCaptured;
 
+/* Glitch detector counters (defined in process.c) */
+extern volatile uint32_t gGlitchCount;
+extern volatile uint32_t gGlitchCaptureIndex;
+extern volatile uint32_t gBlockNumber;
+
+/* TX race detector counters (defined in io.c) */
+extern volatile uint32_t gTxRaceDetected;
+extern volatile uint32_t gSpdifTxRaceDetected;
+
+/* ISR error detail counters (defined in sport.c) */
+extern volatile uint32_t gTxUnderflow;
+extern volatile uint32_t gFsErr;
+extern volatile uint32_t gDmaErr;
+
+/* DMA buffer integrity verifier (defined in io.c) */
+extern volatile uint32_t gDmaVerifyMismatchCount;
+extern volatile uint32_t gDmaVerifyFillCallCount;
+extern volatile uint32_t gDmaVerifyCaptureIndex;
+
+typedef struct DmaVerifyMismatch_ {
+    uint32_t fillCallNumber;
+    uint32_t wordIndex;
+    uint32_t expectedValue;
+    uint32_t actualReadback;
+    float    sourceFloat;
+    uint32_t sourceRaw;
+} DmaVerifyMismatch;
+extern DmaVerifyMismatch dmaVerifyCaptures[];  /* defined in io.c */
+
+/* Glitch snapshot structure (must match process.c definition) */
+typedef struct GlitchSnapshot_ {
+    uint32_t blockNumber;
+    uint32_t frameIndexInBlock;
+    float    previousSample;
+    float    currentSample;
+    float    nextSample;
+    float    jumpMagnitude;
+    uint32_t jackRxRingCount;
+    uint32_t jackTxRingCount;
+    uint32_t spdifRxRingCount;
+    uint32_t jackRxOverrunCount;
+    uint32_t spdifRxOverrunCount;
+    uint32_t jackRxDoneAtGlitch;
+    uint32_t jackTxDoneAtGlitch;
+} GlitchSnapshot;
+extern GlitchSnapshot glitchCaptures[];  /* defined in process.c */
+
 int main(int argc, char *argv[])
 {
 	int delayIteration = 500;
@@ -48,6 +95,7 @@ int main(int argc, char *argv[])
     delay(delayIteration);
 
     initPingPongBuffers();
+    dumpRingBufferAddresses();   /* Item #4: verify no ring slot aliasing */
     delay(delayIteration);
 
     TwiOpen();
@@ -272,19 +320,61 @@ int main(int argc, char *argv[])
 
     printf("main loop running...\n");
 
+    /* Set to 0 to disable ALL main-loop printf for a clean audio test.
+       Counters still update — read them via CCES debugger after the test.
+       Volatile globals to inspect: gGlitchCount, gTxRaceDetected, gDmaVerifyMismatchCount,
+       gBlockNumber, jackRxRing.overrunCount, spdifRxRing.overrunCount */
+#define ENABLE_MAIN_LOOP_PRINTF  0
+
+    /* One-shot diagnostic dump: fires once after ~30s of running, then never again.
+       Single printf = single glitch, but gives us all counters without JTAG. */
+    static bool oneTimeDumpDone = false;
+
     static uint32_t lastPrintRxDone = 0;
+    static uint32_t lastGlitchDumpIndex = 0;
+    static uint32_t lastDmaVerifyDumpIndex = 0;
     for (;;)
     {
         processBlock();
         fillDACOutputFromGlobal();
         fillSpdifOutputFromGlobal();
 
+        /* One-time counter dump after ~30s (11250 ISR callbacks at 375/sec) */
+        if (!oneTimeDumpDone && gJackRxDone >= 11250u) {
+            oneTimeDumpDone = true;
+            printf("=== ONE-TIME DUMP after %lu ISR cycles ===\n"
+                   "GLITCH=%lu  RACE=%lu/%lu  DMA_ERR=%lu  blk=%lu\n"
+                   "ovr=%lu/%lu  err=%lu  fsErr=%lu  dmaErr=%lu  txUnder=%lu\n"
+                   "jRx=%u sRx=%u jTx=%u sTx=%u\n"
+                   "JRx=%lu JTx=%lu SRx=%lu STx=%lu\n",
+                (unsigned long)gJackRxDone,
+                (unsigned long)gGlitchCount,
+                (unsigned long)gTxRaceDetected,
+                (unsigned long)gSpdifTxRaceDetected,
+                (unsigned long)gDmaVerifyMismatchCount,
+                (unsigned long)gBlockNumber,
+                (unsigned long)jackRxRing.overrunCount,
+                (unsigned long)spdifRxRing.overrunCount,
+                (unsigned long)gSportErr,
+                (unsigned long)gFsErr,
+                (unsigned long)gDmaErr,
+                (unsigned long)gTxUnderflow,
+                (unsigned)circBuf_count(&jackRxRing),
+                (unsigned)circBuf_count(&spdifRxRing),
+                (unsigned)circBuf_count(&jackTxRing),
+                (unsigned)circBuf_count(&spdifTxRing),
+                (unsigned long)gJackRxDone, (unsigned long)gJackTxDone,
+                (unsigned long)gSpdifRxDone, (unsigned long)gSpdifTxDone);
+        }
+
+#if ENABLE_MAIN_LOOP_PRINTF
         /* Print every ~5s using ISR counter (not loop iterations) */
         if ((gJackRxDone - lastPrintRxDone) >= 1875u) {
             lastPrintRxDone = gJackRxDone;
             printf("jRx=%u sRx=%u jTx=%u sTx=%u  "
                    "JRx=%lu JTx=%lu SRx=%lu STx=%lu  "
-                   "ovr=%lu/%lu err=%lu\n",
+                   "ovr=%lu/%lu err=%lu  "
+                   "GLITCH=%lu RACE=%lu/%lu DMA_ERR=%lu blk=%lu\n",
                 (unsigned)circBuf_count(&jackRxRing),
                 (unsigned)circBuf_count(&spdifRxRing),
                 (unsigned)circBuf_count(&jackTxRing),
@@ -293,7 +383,51 @@ int main(int argc, char *argv[])
                 (unsigned long)gSpdifRxDone, (unsigned long)gSpdifTxDone,
                 (unsigned long)jackRxRing.overrunCount,
                 (unsigned long)spdifRxRing.overrunCount,
-                (unsigned long)gSportErr);
+                (unsigned long)gSportErr,
+                (unsigned long)gGlitchCount,
+                (unsigned long)gTxRaceDetected,
+                (unsigned long)gSpdifTxRaceDetected,
+                (unsigned long)gDmaVerifyMismatchCount,
+                (unsigned long)gBlockNumber);
+
+            /* Dump any newly captured glitch snapshots */
+            while (lastGlitchDumpIndex < gGlitchCaptureIndex) {
+                GlitchSnapshot *snapshot = &glitchCaptures[lastGlitchDumpIndex];
+                printf("  GLITCH #%lu: blk=%lu frm=%lu  prev=%.6f cur=%.6f next=%.6f  "
+                       "jump=%.6f  jRx=%u jTx=%u sRx=%u  "
+                       "ovr=%lu/%lu  ISR:Rx=%lu Tx=%lu\n",
+                    (unsigned long)(lastGlitchDumpIndex + 1),
+                    (unsigned long)snapshot->blockNumber,
+                    (unsigned long)snapshot->frameIndexInBlock,
+                    (double)snapshot->previousSample,
+                    (double)snapshot->currentSample,
+                    (double)snapshot->nextSample,
+                    (double)snapshot->jumpMagnitude,
+                    (unsigned)snapshot->jackRxRingCount,
+                    (unsigned)snapshot->jackTxRingCount,
+                    (unsigned)snapshot->spdifRxRingCount,
+                    (unsigned long)snapshot->jackRxOverrunCount,
+                    (unsigned long)snapshot->spdifRxOverrunCount,
+                    (unsigned long)snapshot->jackRxDoneAtGlitch,
+                    (unsigned long)snapshot->jackTxDoneAtGlitch);
+                lastGlitchDumpIndex++;
+            }
+
+            /* Dump any newly captured DMA verify mismatches */
+            while (lastDmaVerifyDumpIndex < gDmaVerifyCaptureIndex) {
+                DmaVerifyMismatch *capture = &dmaVerifyCaptures[lastDmaVerifyDumpIndex];
+                printf("  DMA_ERR #%lu: fill=%lu word=%lu  expected=0x%08lX readback=0x%08lX  "
+                       "srcFloat=%.6f srcRaw=0x%08lX\n",
+                    (unsigned long)(lastDmaVerifyDumpIndex + 1),
+                    (unsigned long)capture->fillCallNumber,
+                    (unsigned long)capture->wordIndex,
+                    (unsigned long)capture->expectedValue,
+                    (unsigned long)capture->actualReadback,
+                    (double)capture->sourceFloat,
+                    (unsigned long)capture->sourceRaw);
+                lastDmaVerifyDumpIndex++;
+            }
         }
+#endif /* ENABLE_MAIN_LOOP_PRINTF */
     }
 }

@@ -10,6 +10,10 @@
 #include "audio/io.h"
 #include <math.h>
 
+/* ISR counters (defined in sport.c) — used by glitch detector snapshots */
+extern volatile uint32_t gJackRxDone;
+extern volatile uint32_t gJackTxDone;
+
 /* ---- Diagnostic modes (pick exactly one) ----
  * 0 = Normal: SPDIF IN → DAC 1/2 + SPDIF OUT
  * 1 = Output silence on ALL channels
@@ -25,6 +29,35 @@ volatile bool     dbgRxCaptured = false;
 /* Debug: capture first 24 words of TX data (2 frames x 12 ch) */
 volatile uint32_t dbgTxHead[24];
 volatile bool     dbgTxCaptured = false;
+
+/* ===== Glitch detector =====
+   Monitors DAC output (channel 0, L) for large sample-to-sample jumps.
+   A "glitch" is a jump exceeding GLITCH_THRESHOLD between consecutive frames.
+   Captures a snapshot of the first N glitches for diagnostic dump. */
+#define GLITCH_THRESHOLD        0.3f    /* large jump only — filters out normal zero crossings */
+#define GLITCH_CAPTURE_COUNT    4u      /* number of glitch snapshots to store */
+#define GLITCH_CONTEXT_SAMPLES  8u      /* samples before+after glitch point */
+
+typedef struct GlitchSnapshot_ {
+    uint32_t blockNumber;               /* which processBlock call */
+    uint32_t frameIndexInBlock;         /* which frame within the block */
+    float    previousSample;            /* sample N-1 */
+    float    currentSample;             /* sample N (the glitch) */
+    float    nextSample;                /* sample N+1 (if available) */
+    float    jumpMagnitude;             /* |current - previous| */
+    uint32_t jackRxRingCount;           /* ring state at glitch time */
+    uint32_t jackTxRingCount;
+    uint32_t spdifRxRingCount;
+    uint32_t jackRxOverrunCount;
+    uint32_t spdifRxOverrunCount;
+    uint32_t jackRxDoneAtGlitch;        /* ISR counter snapshot */
+    uint32_t jackTxDoneAtGlitch;
+} GlitchSnapshot;
+
+volatile uint32_t      gGlitchCount = 0;
+volatile uint32_t      gBlockNumber = 0;
+GlitchSnapshot glitchCaptures[GLITCH_CAPTURE_COUNT];
+volatile uint32_t      gGlitchCaptureIndex = 0;
 
 #if (DBG_MODE == 2) || (DBG_MODE == 3)
 static float sinePhase = 0.0f;
@@ -188,6 +221,60 @@ void processBlock(void)
         for (uint32_t i = 0; i < 24u; i++) dbgTxHead[i] = jackOutRaw[i];
         dbgTxCaptured = true;
     }
+
+    /* ===== Glitch detector: scan DAC output channel 0 (L) for large jumps ===== */
+    {
+        static float previousOutputSample = 0.0f;
+        static bool  glitchDetectorPrimed = false;
+
+        for (uint32_t frameIndex = 0; frameIndex < SAMPLES_PER_BLOCK; ++frameIndex)
+        {
+            float currentOutputSample = readSampleFloat(
+                &jackOutRaw[SLOTS_TX * frameIndex + OUT_DAC01]);
+
+            if (glitchDetectorPrimed) {
+                float jumpMagnitude = currentOutputSample - previousOutputSample;
+                if (jumpMagnitude < 0.0f) jumpMagnitude = -jumpMagnitude;
+
+                if (jumpMagnitude > GLITCH_THRESHOLD) {
+                    gGlitchCount++;
+
+                    /* Capture snapshot for the first N glitches */
+                    if (gGlitchCaptureIndex < GLITCH_CAPTURE_COUNT) {
+                        uint32_t captureSlotIndex = gGlitchCaptureIndex;
+                        GlitchSnapshot *snapshot = &glitchCaptures[captureSlotIndex];
+
+                        snapshot->blockNumber        = gBlockNumber;
+                        snapshot->frameIndexInBlock   = frameIndex;
+                        snapshot->previousSample      = previousOutputSample;
+                        snapshot->currentSample       = currentOutputSample;
+                        snapshot->jumpMagnitude        = jumpMagnitude;
+                        snapshot->jackRxRingCount      = circBuf_count(&jackRxRing);
+                        snapshot->jackTxRingCount      = circBuf_count(&jackTxRing);
+                        snapshot->spdifRxRingCount     = circBuf_count(&spdifRxRing);
+                        snapshot->jackRxOverrunCount   = jackRxRing.overrunCount;
+                        snapshot->spdifRxOverrunCount  = spdifRxRing.overrunCount;
+                        snapshot->jackRxDoneAtGlitch   = gJackRxDone;
+                        snapshot->jackTxDoneAtGlitch   = gJackTxDone;
+
+                        /* Next sample if available */
+                        if (frameIndex + 1 < SAMPLES_PER_BLOCK) {
+                            snapshot->nextSample = readSampleFloat(
+                                &jackOutRaw[SLOTS_TX * (frameIndex + 1) + OUT_DAC01]);
+                        } else {
+                            snapshot->nextSample = 0.0f;
+                        }
+
+                        gGlitchCaptureIndex++;
+                    }
+                }
+            }
+            previousOutputSample = currentOutputSample;
+            glitchDetectorPrimed = true;
+        }
+    }
+
+    gBlockNumber++;
 
     circBuf_commitRead(&jackRxRing);
     if (haveFreshSpdifInput) circBuf_commitRead(&spdifRxRing);

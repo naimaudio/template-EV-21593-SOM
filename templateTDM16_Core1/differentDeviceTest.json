@@ -1,0 +1,81 @@
+{
+  "graph_settings": {
+    "buffer_size": 512,
+    "sample_rate": 44100
+  },
+  "composite_definitions": [],
+  "nodes": [
+    {
+      "type_identifier": "sounddevice_input",
+      "node_name": "sounddevice_input_1",
+      "position": [
+        56,
+        456
+      ],
+      "parameters": {
+        "input_gain": 1.0
+      },
+      "extra_state": {
+        "device_name": "ASIO MADIface USB",
+        "device_channel_count": 32
+      }
+    },
+    {
+      "type_identifier": "sounddevice_output",
+      "node_name": "sounddevice_output_1",
+      "position": [
+        892,
+        106
+      ],
+      "parameters": {
+        "output_volume": 1.0
+      },
+      "extra_state": {
+        "device_name": "ASIO MADIface USB",
+        "device_channel_count": 34
+      }
+    },
+    {
+      "type_identifier": "sounddevice_output",
+      "node_name": "sounddevice_output_2",
+      "position": [
+        510,
+        595
+      ],
+      "parameters": {
+        "output_volume": 0.008999999612569809
+      },
+      "extra_state": {
+        "device_name": "Casque (2- Realtek(R) Audio)",
+        "device_channel_count": 2
+      }
+    },
+    {
+      "type_identifier": "sine_oscillator",
+      "node_name": "sine_oscillator_1",
+      "position": [
+        321,
+        135
+      ],
+      "parameters": {
+        "frequency": 440.0,
+        "amplitude": 1.0
+      },
+      "extra_state": {}
+    }
+  ],
+  "connections": [
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_0",
+      "target_node": "sounddevice_output_2",
+      "target_port": "channel_0"
+    },
+    {
+      "source_node": "sine_oscillator_1",
+      "source_port": "output",
+      "target_node": "sounddevice_output_1",
+      "target_port": "channel_0"
+    }
+  ]
+}

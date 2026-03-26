@@ -109,6 +109,7 @@ void initPingPongBuffer(	PingPong* pingPong,
 							uint32_t  numberOfChannels);
 
 void initPingPongBuffers(void);
+void dumpRingBufferAddresses(void);
 
 static inline void flipPingPong(PingPong* pingPong)
 {

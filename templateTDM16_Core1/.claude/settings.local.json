@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(grep:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "WebFetch(domain:)",
+      "Bash(awk:*)",
+      "Bash(find:*)",
+      "Bash(find C:/analog/cces/3.0.2 -type f \\\\\\(-name *.pdf -o -name *design* -o -name *reference* \\\\\\))",
+      "WebSearch",
+      "WebFetch(domain:www.analog.com)",
+      "Bash(pdftotext c:Userst.cletonDocumentsCrossCorerepotemplateTDM16_Core1docsadsp-2159x-sc591-592-594-hrm.pdf -)"
     ]
   }
 }

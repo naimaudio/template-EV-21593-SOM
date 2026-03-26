@@ -1,0 +1,206 @@
+{
+  "graph_settings": {
+    "buffer_size": 512,
+    "sample_rate": 44100
+  },
+  "composite_definitions": [],
+  "nodes": [
+    {
+      "type_identifier": "sounddevice_input",
+      "node_name": "sounddevice_input_1",
+      "position": [
+        -197,
+        419
+      ],
+      "parameters": {
+        "input_gain_db": 0.0
+      },
+      "extra_state": {
+        "output_port_display_names": {
+          "channel_0": "ad spdif out left",
+          "channel_1": "ad spdif out right",
+          "channel_8": "ad jack out left",
+          "channel_9": "ad jack out right"
+        },
+        "device_name": "ASIO MADIface USB",
+        "device_channel_count": 32
+      }
+    },
+    {
+      "type_identifier": "sounddevice_output",
+      "node_name": "sounddevice_output_1",
+      "position": [
+        595,
+        102
+      ],
+      "parameters": {
+        "output_volume": 0.027000000700354576
+      },
+      "extra_state": {
+        "device_name": "ASIO MADIface USB",
+        "device_channel_count": 34
+      }
+    },
+    {
+      "type_identifier": "sine_oscillator",
+      "node_name": "sine_oscillator_1",
+      "position": [
+        15,
+        118
+      ],
+      "parameters": {
+        "frequency": 309.85575184556143,
+        "amplitude_db": -24.56100082397461
+      },
+      "extra_state": {
+        "output_port_display_names": {
+          "output": "tone left"
+        }
+      }
+    },
+    {
+      "type_identifier": "audio_output_buffer",
+      "node_name": "audio_output_buffer_1",
+      "position": [
+        561,
+        380
+      ],
+      "parameters": {},
+      "extra_state": {
+        "dynamic_input_count": 4,
+        "plot_width": 882,
+        "plot_height": 466,
+        "sync_rate": 1,
+        "window_ms": 6.396681785583496
+      }
+    },
+    {
+      "type_identifier": "sweep_oscillator",
+      "node_name": "sweep_oscillator_1",
+      "position": [
+        -6,
+        252
+      ],
+      "parameters": {
+        "start_frequency": 49.85855905795018,
+        "end_frequency": 2000.0,
+        "sweep_duration": 2.0,
+        "amplitude_db": -18.94700050354004
+      },
+      "extra_state": {
+        "output_port_display_names": {
+          "output": "sweep right"
+        }
+      }
+    },
+    {
+      "type_identifier": "sounddevice_output",
+      "node_name": "sounddevice_output_2",
+      "position": [
+        206,
+        1012
+      ],
+      "parameters": {
+        "output_volume": 0.0
+      },
+      "extra_state": {
+        "device_name": "Casque (2- Realtek(R) Audio)",
+        "device_channel_count": 2
+      }
+    },
+    {
+      "type_identifier": "switch",
+      "node_name": "switch_1",
+      "position": [
+        216,
+        418
+      ],
+      "parameters": {},
+      "extra_state": {
+        "output_port_display_names": {
+          "output_1": "ad jack out left",
+          "output_2": "ad jack out right"
+        },
+        "switch_state": {
+          "section_count": 2,
+          "input_count_per_section": 2,
+          "active_section_index": 1
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_0",
+      "target_node": "switch_1",
+      "target_port": "A_in_1"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_0",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_1"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_1",
+      "target_node": "switch_1",
+      "target_port": "A_in_2"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_1",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_2"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_8",
+      "target_node": "switch_1",
+      "target_port": "B_in_1"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_8",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_3"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_9",
+      "target_node": "switch_1",
+      "target_port": "B_in_2"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_9",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_4"
+    },
+    {
+      "source_node": "sine_oscillator_1",
+      "source_port": "output",
+      "target_node": "sounddevice_output_1",
+      "target_port": "channel_0"
+    },
+    {
+      "source_node": "sweep_oscillator_1",
+      "source_port": "output",
+      "target_node": "sounddevice_output_1",
+      "target_port": "channel_1"
+    },
+    {
+      "source_node": "switch_1",
+      "source_port": "output_1",
+      "target_node": "sounddevice_output_2",
+      "target_port": "channel_0"
+    },
+    {
+      "source_node": "switch_1",
+      "source_port": "output_2",
+      "target_node": "sounddevice_output_2",
+      "target_port": "channel_1"
+    }
+  ]
+}

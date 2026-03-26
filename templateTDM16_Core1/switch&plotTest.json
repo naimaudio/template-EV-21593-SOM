@@ -1,0 +1,121 @@
+{
+  "graph_settings": {
+    "buffer_size": 512,
+    "sample_rate": 44100
+  },
+  "composite_definitions": [],
+  "nodes": [
+    {
+      "type_identifier": "sine_oscillator",
+      "node_name": "sine_oscillator_1",
+      "position": [
+        10,
+        52
+      ],
+      "parameters": {
+        "frequency": 69.03452507471401,
+        "amplitude_db": 0.0
+      },
+      "extra_state": {
+        "output_port_display_names": {
+          "output": "sine"
+        }
+      }
+    },
+    {
+      "type_identifier": "square_oscillator",
+      "node_name": "square_oscillator_1",
+      "position": [
+        15,
+        235
+      ],
+      "parameters": {
+        "frequency": 440.0,
+        "amplitude_db": 0.0
+      },
+      "extra_state": {
+        "output_port_display_names": {
+          "output": "square"
+        }
+      }
+    },
+    {
+      "type_identifier": "sawtooth_oscillator",
+      "node_name": "sawtooth_oscillator_1",
+      "position": [
+        8,
+        459
+      ],
+      "parameters": {
+        "frequency": 80.55612630006861,
+        "amplitude_db": 0.0
+      },
+      "extra_state": {
+        "output_port_display_names": {
+          "output": "triangle"
+        }
+      }
+    },
+    {
+      "type_identifier": "switch",
+      "node_name": "switch_1",
+      "position": [
+        400,
+        146
+      ],
+      "parameters": {},
+      "extra_state": {
+        "output_port_display_names": {
+          "output_1": "A_in_1"
+        },
+        "switch_state": {
+          "section_count": 3,
+          "input_count_per_section": 1,
+          "active_section_index": 0
+        }
+      }
+    },
+    {
+      "type_identifier": "audio_output_buffer",
+      "node_name": "audio_output_buffer_1",
+      "position": [
+        671,
+        81
+      ],
+      "parameters": {},
+      "extra_state": {
+        "dynamic_input_count": 1,
+        "plot_width": 494,
+        "plot_height": 382,
+        "sync_rate": 1,
+        "window_ms": 24.70207977294922
+      }
+    }
+  ],
+  "connections": [
+    {
+      "source_node": "sine_oscillator_1",
+      "source_port": "output",
+      "target_node": "switch_1",
+      "target_port": "A_in_1"
+    },
+    {
+      "source_node": "square_oscillator_1",
+      "source_port": "output",
+      "target_node": "switch_1",
+      "target_port": "B_in_1"
+    },
+    {
+      "source_node": "sawtooth_oscillator_1",
+      "source_port": "output",
+      "target_node": "switch_1",
+      "target_port": "C_in_1"
+    },
+    {
+      "source_node": "switch_1",
+      "source_port": "output_1",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_1"
+    }
+  ]
+}

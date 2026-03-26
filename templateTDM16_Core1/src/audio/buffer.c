@@ -122,6 +122,71 @@ static void initCircularBuffer(
     }
 }
 
+void dumpRingBufferAddresses(void)
+{
+    printf("=== Ring Buffer Address Map (verify no aliasing) ===\n");
+
+    printf("jackRxRing  slots: [%p, %p, %p, %p]  wordsPerSlot=%u\n",
+        (void*)jackRxRing.slots[0], (void*)jackRxRing.slots[1],
+        (void*)jackRxRing.slots[2], (void*)jackRxRing.slots[3],
+        (unsigned)jackRxRing.wordsPerSlot);
+
+    printf("jackTxRing  slots: [%p, %p, %p, %p]  wordsPerSlot=%u\n",
+        (void*)jackTxRing.slots[0], (void*)jackTxRing.slots[1],
+        (void*)jackTxRing.slots[2], (void*)jackTxRing.slots[3],
+        (unsigned)jackTxRing.wordsPerSlot);
+
+    printf("spdifRxRing slots: [%p, %p, %p, %p]  wordsPerSlot=%u\n",
+        (void*)spdifRxRing.slots[0], (void*)spdifRxRing.slots[1],
+        (void*)spdifRxRing.slots[2], (void*)spdifRxRing.slots[3],
+        (unsigned)spdifRxRing.wordsPerSlot);
+
+    printf("spdifTxRing slots: [%p, %p, %p, %p]  wordsPerSlot=%u\n",
+        (void*)spdifTxRing.slots[0], (void*)spdifTxRing.slots[1],
+        (void*)spdifTxRing.slots[2], (void*)spdifTxRing.slots[3],
+        (unsigned)spdifTxRing.wordsPerSlot);
+
+    printf("DMA ping-pong buffers:\n");
+    printf("  jackTx: ping=%p pong=%p  writePtr=%p readPtr=%p\n",
+        (void*)jackStream.Tx.ping, (void*)jackStream.Tx.pong,
+        (void*)jackStream.Tx.writePtr, (void*)jackStream.Tx.readPtr);
+    printf("  jackRx: ping=%p pong=%p  writePtr=%p readPtr=%p\n",
+        (void*)jackStream.Rx.ping, (void*)jackStream.Rx.pong,
+        (void*)jackStream.Rx.writePtr, (void*)jackStream.Rx.readPtr);
+    printf("  spdifTx: ping=%p pong=%p  writePtr=%p readPtr=%p\n",
+        (void*)spdifStream.Tx.ping, (void*)spdifStream.Tx.pong,
+        (void*)spdifStream.Tx.writePtr, (void*)spdifStream.Tx.readPtr);
+    printf("  spdifRx: ping=%p pong=%p  writePtr=%p readPtr=%p\n",
+        (void*)spdifStream.Rx.ping, (void*)spdifStream.Rx.pong,
+        (void*)spdifStream.Rx.writePtr, (void*)spdifStream.Rx.readPtr);
+
+    /* Check for overlap: each slot must be distinct from all others */
+    const uint32_t *allSlots[] = {
+        jackRxRing.slots[0], jackRxRing.slots[1], jackRxRing.slots[2], jackRxRing.slots[3],
+        jackTxRing.slots[0], jackTxRing.slots[1], jackTxRing.slots[2], jackTxRing.slots[3],
+        spdifRxRing.slots[0], spdifRxRing.slots[1], spdifRxRing.slots[2], spdifRxRing.slots[3],
+        spdifTxRing.slots[0], spdifTxRing.slots[1], spdifTxRing.slots[2], spdifTxRing.slots[3],
+    };
+    const uint32_t numSlots = 16u;
+    uint32_t aliasCount = 0;
+    for (uint32_t i = 0; i < numSlots; i++) {
+        for (uint32_t j = i + 1; j < numSlots; j++) {
+            if (allSlots[i] == allSlots[j]) {
+                printf("  *** ALIAS: slot[%u]=%p == slot[%u]=%p ***\n",
+                    (unsigned)i, (void*)allSlots[i],
+                    (unsigned)j, (void*)allSlots[j]);
+                aliasCount++;
+            }
+        }
+    }
+    if (aliasCount == 0) {
+        printf("  No aliasing detected — all 16 ring slots are distinct.\n");
+    } else {
+        printf("  *** %u ALIASES FOUND — THIS IS A BUG ***\n", (unsigned)aliasCount);
+    }
+    printf("===================================================\n");
+}
+
 void initPingPongBuffers(void)
 {
 	initPingPongBuffer(&jackStream.Rx, jackBufferRxPing, jackBufferRxPong, FIRST_BUFFER_IS_WRITE, SLOTS_RX);

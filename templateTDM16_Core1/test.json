@@ -1,0 +1,136 @@
+{
+  "graph_settings": {
+    "buffer_size": 512,
+    "sample_rate": 44100
+  },
+  "composite_definitions": [],
+  "nodes": [
+    {
+      "type_identifier": "sounddevice_input",
+      "node_name": "sounddevice_input_1",
+      "position": [
+        -45,
+        143
+      ],
+      "parameters": {
+        "input_gain_db": 0.0
+      },
+      "extra_state": {
+        "device_name": "ASIO MADIface USB",
+        "device_channel_count": 32
+      }
+    },
+    {
+      "type_identifier": "audio_output_buffer",
+      "node_name": "audio_output_buffer_1",
+      "position": [
+        706,
+        375
+      ],
+      "parameters": {},
+      "extra_state": {
+        "dynamic_input_count": 2,
+        "plot_width": 700,
+        "plot_height": 516,
+        "sync_rate": 1,
+        "window_ms": 2.722151756286621
+      }
+    },
+    {
+      "type_identifier": "sounddevice_output",
+      "node_name": "sounddevice_output_2",
+      "position": [
+        688,
+        -49
+      ],
+      "parameters": {
+        "output_volume": 0.15800000727176666
+      },
+      "extra_state": {
+        "device_name": "ASIO MADIface USB",
+        "device_channel_count": 34
+      }
+    },
+    {
+      "type_identifier": "sine_oscillator",
+      "node_name": "sine_oscillator_4",
+      "position": [
+        12,
+        -151
+      ],
+      "parameters": {
+        "frequency": 440.0,
+        "amplitude_db": 0.0
+      },
+      "extra_state": {}
+    },
+    {
+      "type_identifier": "sweep_oscillator",
+      "node_name": "sweep_oscillator_2",
+      "position": [
+        -60,
+        -20
+      ],
+      "parameters": {
+        "start_frequency": 200.0,
+        "end_frequency": 2000.0,
+        "sweep_duration": 2.0,
+        "amplitude_db": 0.0
+      },
+      "extra_state": {}
+    },
+    {
+      "type_identifier": "sounddevice_output",
+      "node_name": "sounddevice_output_3",
+      "position": [
+        316,
+        263
+      ],
+      "parameters": {
+        "output_volume": 1.0
+      },
+      "extra_state": {
+        "device_name": "Mappeur de sons Microsoft - Output",
+        "device_channel_count": 2
+      }
+    }
+  ],
+  "connections": [
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_0",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_1"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_0",
+      "target_node": "sounddevice_output_3",
+      "target_port": "channel_0"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_1",
+      "target_node": "audio_output_buffer_1",
+      "target_port": "input_2"
+    },
+    {
+      "source_node": "sounddevice_input_1",
+      "source_port": "channel_1",
+      "target_node": "sounddevice_output_3",
+      "target_port": "channel_1"
+    },
+    {
+      "source_node": "sine_oscillator_4",
+      "source_port": "output",
+      "target_node": "sounddevice_output_2",
+      "target_port": "channel_0"
+    },
+    {
+      "source_node": "sweep_oscillator_2",
+      "source_port": "output",
+      "target_node": "sounddevice_output_2",
+      "target_port": "channel_1"
+    }
+  ]
+}
