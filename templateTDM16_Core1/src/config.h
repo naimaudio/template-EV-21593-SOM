@@ -26,6 +26,10 @@
 #define APP_SUCCESS             (0)
 #define APP_FAILED              (1)
 
+/* Set to 1 to bypass ASRC and route SPDIF RX directly to SPORT0B
+   (like the ADI example). Diagnostic only — no sample rate conversion. */
+#define ASRC_BYPASS  1
+
 #define FS						48000u		//used for ADAU1962 ADAU1979 and SPORT
 #define MCLK_FS_RATIO			128u		//used for ADAU1962 ADAU1979 and SPORT
 #define WORD_LEN				32u 		//used for ADAU1962 ADAU1979 and SPORT

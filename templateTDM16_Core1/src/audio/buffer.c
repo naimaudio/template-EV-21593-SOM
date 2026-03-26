@@ -104,6 +104,8 @@ static void initCircularBuffer(
 {
     if (!cb) return;
 
+    const size_t bytesPerSlot = (size_t)wordsPerSlot * sizeof(uint32_t);
+
     cb->slots[0] = (uint32_t*)to_uncached(slot0);
     cb->slots[1] = (uint32_t*)to_uncached(slot1);
     cb->slots[2] = (uint32_t*)to_uncached(slot2);
@@ -115,7 +117,6 @@ static void initCircularBuffer(
     cb->overrunCount  = 0u;
     cb->underrunCount = 0u;
 
-    const size_t bytesPerSlot = (size_t)wordsPerSlot * sizeof(uint32_t);
     for (uint32_t i = 0; i < CIRC_BUF_SLOTS; i++) {
         memset(cb->slots[i], 0, bytesPerSlot);
     }
@@ -133,19 +134,8 @@ void initPingPongBuffers(void)
 	initPingPongBuffer(&spdifStream.Tx, spdifBufferTxPing, spdifBufferTxPong, FIRST_BUFFER_IS_WRITE, SLOTS_SPDIF);
 	spdifStream.Tx.isFreshData = false;
 
-	initCircularBuffer(&jackRxRing,
-	    jackRxSlot0, jackRxSlot1, jackRxSlot2, jackRxSlot3,
-	    RX_WORDS);
-
-	initCircularBuffer(&spdifRxRing,
-	    spdifRxSlot0, spdifRxSlot1, spdifRxSlot2, spdifRxSlot3,
-	    SPDIF_WORDS);
-
-	initCircularBuffer(&jackTxRing,
-	    jackTxSlot0, jackTxSlot1, jackTxSlot2, jackTxSlot3,
-	    TX_WORDS);
-
-	initCircularBuffer(&spdifTxRing,
-	    spdifTxSlot0, spdifTxSlot1, spdifTxSlot2, spdifTxSlot3,
-	    SPDIF_WORDS);
+	initCircularBuffer(&jackRxRing,   jackRxSlot0,   jackRxSlot1,   jackRxSlot2,   jackRxSlot3,   RX_WORDS);
+	initCircularBuffer(&spdifRxRing, spdifRxSlot0,  spdifRxSlot1,  spdifRxSlot2,  spdifRxSlot3,  SPDIF_WORDS);
+	initCircularBuffer(&jackTxRing,  jackTxSlot0,   jackTxSlot1,   jackTxSlot2,   jackTxSlot3,   TX_WORDS);
+	initCircularBuffer(&spdifTxRing, spdifTxSlot0,  spdifTxSlot1,  spdifTxSlot2,  spdifTxSlot3,  SPDIF_WORDS);
 }

@@ -3,6 +3,7 @@
 #include <SRU.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "config.h"
 
 void ConfigureSru(void)
 {
@@ -62,8 +63,12 @@ void ConfigureSru(void)
     SRU(PCG0_FSA_O,  SPT0_AFS_I);
     SRU(PCG0_CLKA_O, SPT0_ACLK_I);
 
+#if !ASRC_BYPASS
+    /* ASRC mode: SPORT0B clocked by PCG (ASRC output domain) */
     SRU(PCG0_FSA_O,  SPT0_BFS_I);
     SRU(PCG0_CLKA_O, SPT0_BCLK_I);
+#endif
+    /* In ASRC_BYPASS mode, SPORT0B clocks are set in the bypass block below */
 
     /* ------------------------------------------------
      * PCG0_A outputs -> SPDIF TX base clocks
@@ -76,6 +81,15 @@ void ConfigureSru(void)
      * ------------------------------------------------ */
     SRU(PCG0_CLKB_O, SPDIF0_TX_HFCLK_I);
 
+#if ASRC_BYPASS
+    /* ------------------------------------------------
+     * ASRC BYPASS: SPDIF RX -> SPORT0B directly (like ADI example)
+     * SPORT0B clocked by SPDIF RX recovered clocks
+     * ------------------------------------------------ */
+    SRU(SPDIF0_RX_CLK_O, SPT0_BCLK_I);
+    SRU(SPDIF0_RX_FS_O,  SPT0_BFS_I);
+    SRU(SPDIF0_RX_DAT_O, SPT0_BD0_I);
+#else
     /* ------------------------------------------------
      * SPDIF RX -> ASRC input clocks/data
      * ------------------------------------------------ */
@@ -93,6 +107,7 @@ void ConfigureSru(void)
      * ASRC out -> SPORT0B RX data
      * ------------------------------------------------ */
     SRU(SRC0_DAT_OP_O, SPT0_BD0_I);
+#endif
 
     /* ------------------------------------------------
      * SPORT0A TX data -> SPDIF TX data

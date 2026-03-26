@@ -144,7 +144,7 @@ void ADAU1962_init(void);
 //__________________________________DAC_MSTR_VOL__________________________________
 #define ADAU1962_MSTR_VOL   			0x0B//memory adress to write to
 /* 0000000 : 0dB, 00000001 -0.375dB, ...., 11111111 : -95.625dB */
-#define ADAU1962_DACMSTR_VOL 					((uint8_t[]){0,0,1,1,0,1,0,1}) // 0x35 = -19.875 dB (safe for headphones)
+#define ADAU1962_DACMSTR_VOL 					((uint8_t[]){0,0,0,0,0,0,0,0}) // 0x35 = -19.875 dB (safe for headphones)
 
 //__________________________________DACi_VOL__________________________________
 #define ADAU1962_DAC1_VOL   			0x0C//memory adress to write to

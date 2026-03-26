@@ -62,6 +62,26 @@ bool isSPDIFactive(void);
 
 void AudioIO_applyConfiguration(void);
 
+/* ===== Int32 ↔ Float conversion ==========================================
+   Ring buffers carry float data (stored as uint32_t bit patterns).
+   Conversion happens at the DMA ↔ ring boundary in the fill/drain functions.
+
+   ADC/DAC path (32-bit TDM, 24-bit audio left-justified in bits [31:8]):
+     Full-scale 24-bit audio = 0x7FFFFF00 ≈ 2^31.  Scale = 1/2^31.
+
+   SPDIF RX path (24-bit capture via SLEN=23, sign-extended to 32-bit):
+     Range ±2^23.  I2S 1-BCLK delay doubles values → full-scale = ±2^23.
+     Scale = 1/2^23 so that 0 dBFS input → ±1.0f (the 2× I2S gain is absorbed).
+
+   SPDIF TX path (32-bit TDM via SPORT0A, SLEN=31):
+     Encoder reads upper bits.  Scale = 2^31 (same as DAC).                 */
+#define SCALE_INT32_TO_FLOAT        (1.0f / 2147483648.0f)   /* 1 / 2^31 — for 32-bit paths (ADC/DAC) */
+#define SCALE_FLOAT_TO_INT32        (2147483648.0f)           /* 2^31     — for 32-bit paths (ADC/DAC) */
+#define SCALE_INT24_TO_FLOAT        (1.0f / 8388608.0f)       /* 1 / 2^23 — for 24-bit SPDIF RX (absorbs I2S 2× gain) */
+#define SCALE_FLOAT_TO_SPDIF_TX     (2147483648.0f)           /* 2^31     — same as DAC.
+                                                                  Without SMODEIN, encoder reads bits[31:8]
+                                                                  directly. ±1.0f → bits[31:8] = ±2^23 = 24-bit full scale. */
+
 /* ===== Fill/drain functions (each stream independent) ==================== */
 void fillGlobalInputFromAN(void);
 void fillGlobalInputFromSpdif(void);

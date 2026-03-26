@@ -66,7 +66,11 @@ int ASRC_init(void)
         return 0;
     }
 
-    /* ASRC0 = left channel of stereo pair 0/1 */
+    /* --- 1) Open both ASRCs before enabling either ---
+       Opening clears the corresponding 16-bit half of CTL01.
+       If ASRC0 were enabled first, opening ASRC1 would clear
+       ASRC1's half while ASRC0 is running, breaking the I2S pair. */
+
     r = adi_asrc_Open(
             0u,                    /* Block number: DAI0-ASRC */
             0u,                    /* Device number: ASRC0 (left ch) */
@@ -75,18 +79,6 @@ int ASRC_init(void)
             &handleASRC0);
     if (_asrc_chk("adi_asrc_Open(0)", r)) return 1;
 
-    /* SPDIF RX decoder outputs I2S serial data on SC594.
-       ASRC output also I2S to match SPORT0B configuration. */
-    r = adi_asrc_SetSerialFormat(handleASRC0,
-            ADI_ASRC_INPUT_I2S,              /* SPDIF RX output is I2S on SC594 */
-            ADI_ASRC_OUTPUT_I2S,             /* SPORT0B is in I2S mode */
-            ADI_ASRC_WORD_LENGTH_24);
-    if (_asrc_chk("adi_asrc_SetSerialFormat(0)", r)) return 1;
-
-    r = adi_asrc_Enable(handleASRC0, true);
-    if (_asrc_chk("adi_asrc_Enable(0)", r)) return 1;
-
-    /* ASRC1 = right channel of stereo pair 0/1 */
     r = adi_asrc_Open(
             0u,                    /* Block number: DAI0-ASRC */
             1u,                    /* Device number: ASRC1 (right ch) */
@@ -95,12 +87,24 @@ int ASRC_init(void)
             &handleASRC1);
     if (_asrc_chk("adi_asrc_Open(1)", r)) return 1;
 
+    /* --- 2) Configure both before enabling either --- */
+
+    r = adi_asrc_SetSerialFormat(handleASRC0,
+            ADI_ASRC_INPUT_LEFT_JUSTIFIED,   /* SPDIF RX decoder output is left-justified (fixed, no SMODEOUT) */
+            ADI_ASRC_OUTPUT_I2S,             /* SPORT0B is in I2S mode */
+            ADI_ASRC_WORD_LENGTH_24);
+    if (_asrc_chk("adi_asrc_SetSerialFormat(0)", r)) return 1;
+
     r = adi_asrc_SetSerialFormat(handleASRC1,
-            ADI_ASRC_INPUT_I2S,
+            ADI_ASRC_INPUT_LEFT_JUSTIFIED,   /* SPDIF RX decoder output is left-justified (fixed, no SMODEOUT) */
             ADI_ASRC_OUTPUT_I2S,
             ADI_ASRC_WORD_LENGTH_24);
     if (_asrc_chk("adi_asrc_SetSerialFormat(1)", r)) return 1;
 
+    /* --- 3) Enable both back-to-back (minimal gap between EN0 and EN1) --- */
+
+    r = adi_asrc_Enable(handleASRC0, true);
+    if (_asrc_chk("adi_asrc_Enable(0)", r)) return 1;
     r = adi_asrc_Enable(handleASRC1, true);
     if (_asrc_chk("adi_asrc_Enable(1)", r)) return 1;
 
@@ -114,16 +118,16 @@ int ASRC_softReset(void)
     ADI_ASRC_RESULT r;
     if (handleASRC0 == NULL) return 1;
 
-    /* Disable both ASRCs */
+    /* Disable both ASRCs simultaneously */
     r = adi_asrc_Enable(handleASRC0, false);
     if (_asrc_chk("ASRC_softReset: disable(0)", r)) return 1;
     r = adi_asrc_Enable(handleASRC1, false);
     if (_asrc_chk("ASRC_softReset: disable(1)", r)) return 1;
 
-    /* Brief pause to let ASRC internal state machine reset */
-    for (volatile int i = 0; i < 0xFFFF; i++) { asm("nop;"); }
+    /* Longer pause to let ASRC internal state machine fully reset */
+    for (volatile int i = 0; i < 0x1FFFF; i++) { asm("nop;"); }
 
-    /* Re-enable */
+    /* Re-enable both back-to-back (keep pair synchronized) */
     r = adi_asrc_Enable(handleASRC0, true);
     if (_asrc_chk("ASRC_softReset: enable(0)", r)) return 1;
     r = adi_asrc_Enable(handleASRC1, true);

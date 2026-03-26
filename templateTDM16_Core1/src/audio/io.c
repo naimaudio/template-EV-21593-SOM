@@ -35,18 +35,47 @@ void AudioIO_applyConfiguration(void)
     numberOfOutputChannels = BASE_DAC_OUTPUT_CHANNELS   + numberOfSPDIFChannels;
 }
 
-/* ===== Independent fill/drain functions ==================================
-   Each ping-pong stream is served on its own schedule — no coupling.
-   RX fills are called from the SPORT ISR — use plain word loops
-   instead of memcpy to stay ISR-safe on SHARC.                             */
+/* ===== Conversion helpers ================================================
+   Ring buffers store float values in uint32_t slots (same 32-bit width).
+   These helpers convert at the DMA ↔ ring boundary.                        */
 
-/* ISR-safe word copy (no library dependency) */
+/* ISR-safe word copy (no library dependency, safe for uncached memory) */
 static inline void wordcopy(uint32_t * __restrict dst,
                             const uint32_t * __restrict src,
                             uint32_t n)
 {
     for (uint32_t i = 0; i < n; i++) dst[i] = src[i];
 }
+
+/* Store a float into a uint32_t slot (bit-preserving, no cast UB) */
+static inline void storeFloat(uint32_t *destination, float value)
+{
+    union { float floatRepresentation; uint32_t integerRepresentation; } converter;
+    converter.floatRepresentation = value;
+    *destination = converter.integerRepresentation;
+}
+
+/* Load a float from a uint32_t slot */
+static inline float loadFloat(const uint32_t *source)
+{
+    union { float floatRepresentation; uint32_t integerRepresentation; } converter;
+    converter.integerRepresentation = *source;
+    return converter.floatRepresentation;
+}
+
+/* Clamp float to [-1.0, 1.0) and convert to int32 with given scale */
+static inline int32_t floatToInt32Clamped(float value, float scale)
+{
+    if (value >= 1.0f)  return  0x7FFFFFFF;
+    if (value < -1.0f)  return (int32_t)0x80000000;
+    return (int32_t)(value * scale);
+}
+
+/* ===== Fill/drain functions ===============================================
+   RX fills: convert int32 DMA data → float in ring buffer.
+   TX drains: convert float from ring buffer → int32 DMA data.
+   Each ping-pong stream is served independently.
+   RX fills are called from the SPORT ISR context.                          */
 
 void fillGlobalInputFromAN(void)
 {
@@ -58,9 +87,15 @@ void fillGlobalInputFromAN(void)
         return;
     }
 
-    wordcopy(circBuf_writeSlot(&jackRxRing),
-             jackStream.Rx.readPtr,
-             RX_WORDS);
+    /* sourceBuffer = uncached DMA buffer (needs volatile).
+       destinationSlot = cached ring buffer (no volatile needed). */
+    volatile const uint32_t *sourceBuffer = jackStream.Rx.readPtr;
+    uint32_t                *destinationSlot = circBuf_writeSlot(&jackRxRing);
+
+    for (uint32_t i = 0; i < RX_WORDS; i++) {
+        float normalizedSample = (float)((int32_t)sourceBuffer[i]) * SCALE_INT32_TO_FLOAT;
+        storeFloat((uint32_t *)&destinationSlot[i], normalizedSample);
+    }
 
     circBuf_commitWrite(&jackRxRing);
     jackStream.Rx.isFreshData = false;
@@ -76,9 +111,17 @@ void fillGlobalInputFromSpdif(void)
         return;
     }
 
-    wordcopy(circBuf_writeSlot(&spdifRxRing),
-             spdifStream.Rx.readPtr,
-             SPDIF_WORDS);
+    volatile const uint32_t *sourceBuffer = spdifStream.Rx.readPtr;
+    uint32_t                *destinationSlot = circBuf_writeSlot(&spdifRxRing);
+
+    /* SPDIF RX: MC mode captures raw I2S data from the decoder.
+       bit31 = 0 always (I2S padding from decoder), bit30 = audio sign.
+       Shift left by 1 to move the real sign into bit31 position. */
+    for (uint32_t i = 0; i < SPDIF_WORDS; i++) {
+        int32_t correctedSample = (int32_t)(sourceBuffer[i] << 1);
+        float normalizedSample = (float)correctedSample * SCALE_INT32_TO_FLOAT;
+        storeFloat((uint32_t *)&destinationSlot[i], normalizedSample);
+    }
 
     circBuf_commitWrite(&spdifRxRing);
     spdifStream.Rx.isFreshData = false;
@@ -86,16 +129,16 @@ void fillGlobalInputFromSpdif(void)
 
 void fillDACOutputFromGlobal(void)
 {
+    if (jackStream.Tx.isFreshData) return;
     if (!circBuf_canRead(&jackTxRing)) return;
 
-    /* Spin until DMA has consumed the previous buffer */
-    while (jackStream.Tx.isFreshData) { /* ISR clears this */ }
+    const uint32_t          *sourceSlot = circBuf_readSlot(&jackTxRing);
+    volatile uint32_t       *destinationBuffer = (volatile uint32_t *)volatileReadWritePtr(&jackStream.Tx);
 
-    /* wordcopy instead of memcpy — SHARC memcpy may use block transfers
-       that don't work correctly with uncached (0x28xxx) memory regions */
-    wordcopy((uint32_t *)volatileReadWritePtr(&jackStream.Tx),
-             circBuf_readSlot(&jackTxRing),
-             TX_WORDS);
+    for (uint32_t i = 0; i < TX_WORDS; i++) {
+        float normalizedSample = loadFloat(&sourceSlot[i]);
+        destinationBuffer[i] = (uint32_t)floatToInt32Clamped(normalizedSample, SCALE_FLOAT_TO_INT32);
+    }
 
     jackStream.Tx.isFreshData = true;
     circBuf_commitRead(&jackTxRing);
@@ -105,12 +148,16 @@ void fillSpdifOutputFromGlobal(void)
 {
     if (!isSPDIFactive())               return;
     if (!circBuf_canRead(&spdifTxRing)) return;
-    if (spdifStream.Tx.isFreshData)     return;  /* non-blocking: SPORT0 clocks
-                                                     may be dead if no SPDIF source */
+    if (spdifStream.Tx.isFreshData)     return;
 
-    wordcopy((uint32_t *)volatileReadWritePtr(&spdifStream.Tx),
-             circBuf_readSlot(&spdifTxRing),
-             SPDIF_WORDS);
+    const uint32_t          *sourceSlot = circBuf_readSlot(&spdifTxRing);
+    volatile uint32_t       *destinationBuffer = (volatile uint32_t *)volatileReadWritePtr(&spdifStream.Tx);
+
+    /* Convert float → int32 for SPDIF TX (same as DAC path). */
+    for (uint32_t i = 0; i < SPDIF_WORDS; i++) {
+        float normalizedSample = loadFloat(&sourceSlot[i]);
+        destinationBuffer[i] = (uint32_t)floatToInt32Clamped(normalizedSample, SCALE_FLOAT_TO_SPDIF_TX);
+    }
 
     spdifStream.Tx.isFreshData = true;
     circBuf_commitRead(&spdifTxRing);

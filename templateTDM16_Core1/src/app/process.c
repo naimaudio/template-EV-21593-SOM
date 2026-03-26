@@ -1,8 +1,8 @@
 /*
  * process.c — User DSP processing
  *
- * This is where you write your audio processing code.
- * processBlock() is called from the main loop whenever data is available.
+ * All audio in this file is float [-1.0, +1.0].
+ * Conversion between int32 (DMA) and float happens in io.c fill/drain functions.
  */
 
 #include "app/process.h"
@@ -11,10 +11,10 @@
 #include <math.h>
 
 /* ---- Diagnostic modes (pick exactly one) ----
- * 0 = Normal ADC→DAC passthrough
+ * 0 = Normal: SPDIF IN → DAC 1/2 + SPDIF OUT
  * 1 = Output silence on ALL channels
- * 2 = Output 1 kHz sine on DAC01 ONLY (should be LEFT ear only)
- * 3 = Output 1 kHz sine on DAC02 ONLY (should be RIGHT ear only)
+ * 2 = Output 1 kHz sine on DAC01 ONLY
+ * 3 = Output 1 kHz sine on DAC02 ONLY
  */
 #define DBG_MODE  0
 
@@ -30,154 +30,167 @@ volatile bool     dbgTxCaptured = false;
 static float sinePhase = 0.0f;
 #define SINE_FREQ   1000.0f
 #define SAMPLE_RATE 48000.0f
-#define SINE_AMP    0x20000000   /* ~-12 dBFS, comfortable headphone level */
+#define SINE_AMP    0.5f   /* -6 dBFS */
 #endif
+
+/* ===== Helper: read float from uint32_t ring buffer slot ================= */
+static inline float readSampleFloat(const uint32_t *slot)
+{
+    union { float floatRepresentation; uint32_t integerRepresentation; } converter;
+    converter.integerRepresentation = *slot;
+    return converter.floatRepresentation;
+}
+
+/* ===== Helper: write float to uint32_t ring buffer slot ================== */
+static inline void writeSampleFloat(uint32_t *slot, float value)
+{
+    union { float floatRepresentation; uint32_t integerRepresentation; } converter;
+    converter.floatRepresentation = value;
+    *slot = converter.integerRepresentation;
+}
 
 void prepareToPlay(void)
 {
-	// init things before entering the main loop
-
 	return;
 }
 
 void processBlock(void)
 {
-    /* JACK is master clock — need jack data to process */
     if (!circBuf_canRead(&jackRxRing))   return;
     if (!circBuf_canWrite(&jackTxRing))  return;
 
-    const uint32_t * __restrict jackIn   = circBuf_readSlot(&jackRxRing);
-    uint32_t       * __restrict jackOut  = circBuf_writeSlot(&jackTxRing);
+    const uint32_t *jackInRaw  = circBuf_readSlot(&jackRxRing);
+    uint32_t       *jackOutRaw = circBuf_writeSlot(&jackTxRing);
 
-    /* SPDIF TX is optional — don't let a stalled SPDIF clock block DAC output */
+    /* SPDIF TX is optional */
     const bool canWriteSpdif = circBuf_canWrite(&spdifTxRing);
-    uint32_t       * __restrict spdifOut = canWriteSpdif ? circBuf_writeSlot(&spdifTxRing) : NULL;
+    uint32_t  *spdifOutRaw   = canWriteSpdif ? circBuf_writeSlot(&spdifTxRing) : NULL;
 
-    const bool haveSpdif = circBuf_canRead(&spdifRxRing);
+    /* SPDIF RX: use current data if available, otherwise hold the last block.
+       The SPDIF and Jack clocks are asynchronous (ASRC bypassed), so the SPDIF
+       ring occasionally runs empty for 1 block. Holding the last block avoids
+       an audible click/dropout (silence) on all channels. */
+    static uint32_t lastSpdifBlock[SPDIF_WORDS];
+    static bool     lastSpdifBlockValid = false;
+
+    const bool haveFreshSpdifInput = circBuf_canRead(&spdifRxRing);
+    const uint32_t *spdifInRaw;
+
+    if (haveFreshSpdifInput) {
+        spdifInRaw = circBuf_readSlot(&spdifRxRing);
+        /* Save a copy for hold-over when ring runs empty */
+        for (uint32_t i = 0; i < SPDIF_WORDS; i++) lastSpdifBlock[i] = spdifInRaw[i];
+        lastSpdifBlockValid = true;
+    } else if (lastSpdifBlockValid) {
+        spdifInRaw = lastSpdifBlock;   /* hold last block */
+    } else {
+        spdifInRaw = NULL;             /* no data yet at all */
+    }
 
     /* Capture first 16 words of RX data once for diagnostic */
     if (!dbgRxCaptured) {
-        for (uint32_t i = 0; i < 16u; i++) dbgRxHead[i] = jackIn[i];
+        for (uint32_t i = 0; i < 16u; i++) dbgRxHead[i] = jackInRaw[i];
         dbgRxCaptured = true;
     }
 
-    const uint32_t *spdifIn = haveSpdif ? circBuf_readSlot(&spdifRxRing) : NULL;
-
-    for (uint32_t f = 0; f < SAMPLES_PER_BLOCK; ++f)
+    for (uint32_t frameIndex = 0; frameIndex < SAMPLES_PER_BLOCK; ++frameIndex)
     {
-        const uint32_t *jIn  = &jackIn [SLOTS_RX * f];
-        uint32_t       *jOut = &jackOut[SLOTS_TX * f];
-        uint32_t       *sOut = spdifOut ? &spdifOut[SLOTS_SPDIF * f] : NULL;
+        /* --- Read inputs as float --- */
+        const uint32_t *analogInputFrame = &jackInRaw[SLOTS_RX * frameIndex];
+        float analogInputLeft   = readSampleFloat(&analogInputFrame[IN_AN1]);
+        float analogInputRight  = readSampleFloat(&analogInputFrame[IN_AN2]);
+        float analogInput3      = readSampleFloat(&analogInputFrame[IN_AN3]);
+        float analogInput4      = readSampleFloat(&analogInputFrame[IN_AN4]);
+
+        float spdifInputLeft  = 0.0f;
+        float spdifInputRight = 0.0f;
+        if (spdifInRaw) {  /* always true once first SPDIF block arrives */
+            const uint32_t *spdifInputFrame = &spdifInRaw[SLOTS_SPDIF * frameIndex];
+            spdifInputLeft  = readSampleFloat(&spdifInputFrame[IN_SPDIF_L]);
+            spdifInputRight = readSampleFloat(&spdifInputFrame[IN_SPDIF_R]);
+        }
+
+        /* --- Compute outputs (all in float) --- */
+        float dacOutput[SLOTS_TX];
+        float spdifOutputLeft;
+        float spdifOutputRight;
 
 #if DBG_MODE == 1
         /* Mode 1: silence */
-        jOut[OUT_DAC01] = 0;  jOut[OUT_DAC02] = 0;
-        jOut[OUT_DAC03] = 0;  jOut[OUT_DAC04] = 0;
-        jOut[OUT_DAC05] = 0;  jOut[OUT_DAC06] = 0;
-        jOut[OUT_DAC07] = 0;  jOut[OUT_DAC08] = 0;
-        jOut[OUT_DAC09] = 0;  jOut[OUT_DAC10] = 0;
-        jOut[OUT_DAC11] = 0;  jOut[OUT_DAC12] = 0;
-        if (sOut) { sOut[OUT_SPDIF_L] = 0; sOut[OUT_SPDIF_R] = 0; }
+        for (uint32_t ch = 0; ch < SLOTS_TX; ch++) dacOutput[ch] = 0.0f;
+        spdifOutputLeft  = 0.0f;
+        spdifOutputRight = 0.0f;
 
 #elif DBG_MODE == 2
-        /* Mode 2: 1 kHz sine on DAC01 ONLY → should be LEFT ear */
+        /* Mode 2: 1 kHz sine on DAC01 only */
         {
-            float s = sinf(sinePhase);
-            int32_t sample = (int32_t)(s * (float)SINE_AMP);
-            uint32_t u = (uint32_t)sample;
-            jOut[OUT_DAC01] = u;   jOut[OUT_DAC02] = 0;
-            jOut[OUT_DAC03] = 0;   jOut[OUT_DAC04] = 0;
-            jOut[OUT_DAC05] = 0;   jOut[OUT_DAC06] = 0;
-            jOut[OUT_DAC07] = 0;   jOut[OUT_DAC08] = 0;
-            jOut[OUT_DAC09] = 0;   jOut[OUT_DAC10] = 0;
-            jOut[OUT_DAC11] = 0;   jOut[OUT_DAC12] = 0;
-            if (sOut) { sOut[OUT_SPDIF_L] = 0; sOut[OUT_SPDIF_R] = 0; }
+            float sineValue = sinf(sinePhase) * SINE_AMP;
+            for (uint32_t ch = 0; ch < SLOTS_TX; ch++) dacOutput[ch] = 0.0f;
+            dacOutput[OUT_DAC01] = sineValue;
+            spdifOutputLeft  = 0.0f;
+            spdifOutputRight = 0.0f;
             sinePhase += 2.0f * 3.14159265f * SINE_FREQ / SAMPLE_RATE;
             if (sinePhase >= 2.0f * 3.14159265f) sinePhase -= 2.0f * 3.14159265f;
         }
 
 #elif DBG_MODE == 3
-        /* Mode 3: 1 kHz sine on DAC02 ONLY → should be RIGHT ear */
+        /* Mode 3: 1 kHz sine on DAC02 only */
         {
-            float s = sinf(sinePhase);
-            int32_t sample = (int32_t)(s * (float)SINE_AMP);
-            uint32_t u = (uint32_t)sample;
-            jOut[OUT_DAC01] = 0;   jOut[OUT_DAC02] = u;
-            jOut[OUT_DAC03] = 0;   jOut[OUT_DAC04] = 0;
-            jOut[OUT_DAC05] = 0;   jOut[OUT_DAC06] = 0;
-            jOut[OUT_DAC07] = 0;   jOut[OUT_DAC08] = 0;
-            jOut[OUT_DAC09] = 0;   jOut[OUT_DAC10] = 0;
-            jOut[OUT_DAC11] = 0;   jOut[OUT_DAC12] = 0;
-            if (sOut) { sOut[OUT_SPDIF_L] = 0; sOut[OUT_SPDIF_R] = 0; }
+            float sineValue = sinf(sinePhase) * SINE_AMP;
+            for (uint32_t ch = 0; ch < SLOTS_TX; ch++) dacOutput[ch] = 0.0f;
+            dacOutput[OUT_DAC02] = sineValue;
+            spdifOutputLeft  = 0.0f;
+            spdifOutputRight = 0.0f;
             sinePhase += 2.0f * 3.14159265f * SINE_FREQ / SAMPLE_RATE;
             if (sinePhase >= 2.0f * 3.14159265f) sinePhase -= 2.0f * 3.14159265f;
         }
 
 #else
-        /* Mode 0: normal passthrough
-         *
-         * ---- Inputs ----
-         * jIn[IN_AN1]  (0)  Analog input 1 (ADC ch1, TDM slot 0)
-         * jIn[IN_AN2]  (1)  Analog input 2 (ADC ch2, TDM slot 1)
-         * jIn[IN_AN3]  (2)  Analog input 3 (ADC ch3, TDM slot 2)
-         * jIn[IN_AN4]  (3)  Analog input 4 (ADC ch4, TDM slot 3)
-         * sIn[IN_SPDIF_L] (0)  SPDIF input left
-         * sIn[IN_SPDIF_R] (1)  SPDIF input right
-         *
-         * ---- Outputs ----
-         * jOut[OUT_DAC01] (0)   DAC 1  — headphone left
-         * jOut[OUT_DAC02] (1)   DAC 2  — headphone right
-         * jOut[OUT_DAC03] (2)   DAC 3
-         * jOut[OUT_DAC04] (3)   DAC 4
-         * jOut[OUT_DAC05] (4)   DAC 5
-         * jOut[OUT_DAC06] (5)   DAC 6
-         * jOut[OUT_DAC07] (6)   DAC 7
-         * jOut[OUT_DAC08] (7)   DAC 8
-         * jOut[OUT_DAC09] (8)   DAC 9
-         * jOut[OUT_DAC10] (9)   DAC 10
-         * jOut[OUT_DAC11] (10)  DAC 11
-         * jOut[OUT_DAC12] (11)  DAC 12
-         * sOut[OUT_SPDIF_L] (0)  SPDIF output left
-         * sOut[OUT_SPDIF_R] (1)  SPDIF output right
-         */
+        /* Mode 0: SPDIF IN → DAC 1/2 and SPDIF OUT */
         {
-            /* DAC 1/2: analog + SPDIF summed (hear both sources simultaneously) */
-            const uint32_t *sIn = (haveSpdif) ? &spdifIn[SLOTS_SPDIF * f] : NULL;
-
-            int32_t l = (int32_t)jIn[IN_AN1];
-            int32_t r = (int32_t)jIn[IN_AN2];
-            if (sIn) {
-                l = (l >> 1) + ((int32_t)sIn[IN_SPDIF_L] >> 1);
-                r = (r >> 1) + ((int32_t)sIn[IN_SPDIF_R] >> 1);
+            /* DAC 1/2: SPDIF input (or analog fallback if no SPDIF) */
+            if (spdifInRaw) {
+                dacOutput[OUT_DAC01] = spdifInputLeft;
+                dacOutput[OUT_DAC02] = spdifInputRight;
+            } else {
+                dacOutput[OUT_DAC01] = analogInputLeft;
+                dacOutput[OUT_DAC02] = analogInputRight;
             }
-            jOut[OUT_DAC01] = (uint32_t)l;
-            jOut[OUT_DAC02] = (uint32_t)r;
 
-            /* Analog passthrough on DAC 3/4 */
-            jOut[OUT_DAC03] = jIn[IN_AN3];    jOut[OUT_DAC04] = jIn[IN_AN4];
+            /* DAC 3/4: analog passthrough */
+            dacOutput[OUT_DAC03] = analogInput3;
+            dacOutput[OUT_DAC04] = analogInput4;
 
-            jOut[OUT_DAC05] = 0;              jOut[OUT_DAC06] = 0;
-            jOut[OUT_DAC07] = 0;              jOut[OUT_DAC08] = 0;
-            jOut[OUT_DAC09] = 0;              jOut[OUT_DAC10] = 0;
-            jOut[OUT_DAC11] = 0;              jOut[OUT_DAC12] = 0;
+            /* DAC 5-12: silence */
+            for (uint32_t ch = OUT_DAC05; ch < SLOTS_TX; ch++)
+                dacOutput[ch] = 0.0f;
 
-            /* SPDIF TX: forward analog inputs */
-            if (sOut) {
-                sOut[OUT_SPDIF_L] = jIn[IN_AN1];
-                sOut[OUT_SPDIF_R] = jIn[IN_AN2];
-            }
+            /* SPDIF OUT: forward SPDIF IN */
+            spdifOutputLeft  = spdifInputLeft;
+            spdifOutputRight = spdifInputRight;
         }
 #endif
+
+        /* --- Write outputs as float --- */
+        uint32_t *dacOutputFrame = &jackOutRaw[SLOTS_TX * frameIndex];
+        for (uint32_t ch = 0; ch < SLOTS_TX; ch++)
+            writeSampleFloat(&dacOutputFrame[ch], dacOutput[ch]);
+
+        if (spdifOutRaw) {
+            uint32_t *spdifOutputFrame = &spdifOutRaw[SLOTS_SPDIF * frameIndex];
+            writeSampleFloat(&spdifOutputFrame[OUT_SPDIF_L], spdifOutputLeft);
+            writeSampleFloat(&spdifOutputFrame[OUT_SPDIF_R], spdifOutputRight);
+        }
     }
 
     /* Capture first 24 words of TX data once (2 frames x 12 ch) */
     if (!dbgTxCaptured) {
-        for (uint32_t i = 0; i < 24u; i++) dbgTxHead[i] = jackOut[i];
+        for (uint32_t i = 0; i < 24u; i++) dbgTxHead[i] = jackOutRaw[i];
         dbgTxCaptured = true;
     }
 
     circBuf_commitRead(&jackRxRing);
-    if (haveSpdif) circBuf_commitRead(&spdifRxRing);
+    if (haveFreshSpdifInput) circBuf_commitRead(&spdifRxRing);
     circBuf_commitWrite(&jackTxRing);
     if (canWriteSpdif) circBuf_commitWrite(&spdifTxRing);
 }

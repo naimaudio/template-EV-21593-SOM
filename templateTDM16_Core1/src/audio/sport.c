@@ -148,17 +148,12 @@ void SportCallback(void *pAppHandle, uint32_t event, void *pArg)
         }
         break;
     default:
-    	//break;
-    	printEvent(event);//debug
-    	if (pAppHandle == handleSport4BRx) {
-    	    printf("from sport4B RX\n");
-    	} else if (pAppHandle == handleSport4ATx) {
-    	    printf("from sport4A TX\n");
-    	} else if (pAppHandle == handleSport0BRx) {
-    	    printf("from sport0B RX\n");
-    	} else if (pAppHandle == handleSport0ATx) {
-    	    printf("from sport0A TX\n");
-    	}
+        /* Count unexpected events — NO printf here, it would block audio for ms */
+        gSportErr++;
+        if (event & ADI_SPORT_HW_ERR_FS)                       gFsErr++;
+        if (event & ADI_SPORT_HW_ERR_DMA)                      gDmaErr++;
+        if (event & (ADI_SPORT_HW_ERR_PRIMARY_CHNL_UNDERFLOW
+                   | ADI_SPORT_HW_ERR_SECONDARY_CHNL_UNDERFLOW)) gTxUnderflow++;
         break;
     }
 }
@@ -340,8 +335,22 @@ int SpdifRxinit(void)
 
 	eResult=adi_spdif_Rx_Open(SpdifDeviceNum0,memorySpdifRx,ADI_SPDIF_RX_MEMORY_SIZE,&handleSpdifRx);
     CHECK_RESULT(eResult);
+
+	/* Configure BEFORE Enable (driver rejects config after enable):
+	   - AutoRestart: re-try lock automatically after loss-of-lock
+	     (without this, decoder gives up after first lock failure)
+	   - FastLock: helps PLL acquire lock faster on noisy/marginal signals
+	   - TDMSEL: set PLL range for incoming sample rate */
+	eResult=adi_spdif_Rx_EnableAutoAudioRestart(handleSpdifRx, true);
+    CHECK_RESULT(eResult);
+
 	eResult=adi_spdif_Rx_EnableFastLock(handleSpdifRx, true);
     CHECK_RESULT(eResult);
+
+	/* Use widest PLL range to cover 32kHz..192kHz sources */
+	eResult=adi_spdif_Rx_SetTdmsel(handleSpdifRx, ADI_SPDIF_RX_SF_96K_TO_192K);
+    CHECK_RESULT(eResult);
+
 	eResult=adi_spdif_Rx_Enable(handleSpdifRx,true);
     CHECK_RESULT(eResult);
     return 0;
@@ -353,6 +362,12 @@ int SpdifTxinit(void)
 
 	eResult=adi_spdif_Tx_Open(SpdifDeviceNum0,memorySpdifTx,ADI_SPDIF_TX_MEMORY_SIZE,&handleSpdifTx);
     CHECK_RESULT(eResult);
+
+	/* Do NOT set SMODEIN — the ADI SPDIF example leaves it at default (0).
+	   The encoder reads bits [31:8] from the SPORT I2S serial output correctly
+	   without the I2S offset compensation. Setting SMODEIN=1 caused a 1-bit shift
+	   that doubled the output amplitude. */
+
 	eResult=adi_spdif_Tx_Enable(handleSpdifTx,true);
     CHECK_RESULT(eResult);
     return 0;
@@ -364,51 +379,72 @@ int spdifSportInit(void)
 		printf("spdifSportInit not doing anything because spdif is not active\n");
 		return -1;
 	}
-	// init spdif
+
+	printf("spdifSportInit: ASRC_BYPASS=%d\n", ASRC_BYPASS);
+
+	/* --- 1) Enable SPDIF RX/TX first so clocks are available --- */
 	SpdifRxinit();
 	SpdifTxinit();
+	printf("SPDIF RX/TX enabled, STAT=0x%08lX\n",
+	    (unsigned long)*pREG_SPDIF0_RX_STAT);
 
 	ADI_SPORT_RESULT    eResult;
 
+	/* --- 2) Open SPORT0 A/B --- */
     eResult = adi_sport_Open(SportDeviceNum0,ADI_HALF_SPORT_A,ADI_SPORT_DIR_TX, ADI_SPORT_I2S_MODE, memorySport0ATx,ADI_SPORT_MEMORY_SIZE,&handleSport0ATx);
     if (eResult) { printf("SPDIF: Open 0A TX failed rc=%d\n", (int)eResult); return 1; }
-    eResult = adi_sport_Open(SportDeviceNum0,ADI_HALF_SPORT_B,ADI_SPORT_DIR_RX, ADI_SPORT_I2S_MODE, memorySport0BRx,ADI_SPORT_MEMORY_SIZE,&handleSport0BRx);
+    /* SPORT0B RX: MC mode (TDM2) — captures raw I2S serial from decoder.
+       bit31 is always 0 (I2S padding from decoder), corrected in io.c with <<1 shift. */
+    eResult = adi_sport_Open(SportDeviceNum0,ADI_HALF_SPORT_B,ADI_SPORT_DIR_RX, ADI_SPORT_MC_MODE, memorySport0BRx,ADI_SPORT_MEMORY_SIZE,&handleSport0BRx);
     if (eResult) { printf("SPDIF: Open 0B RX failed rc=%d\n", (int)eResult); return 1; }
 
-    /* Configure SPORT0 data format: 32-bit words, MSB first, sign-fill */
+    /* --- 3) Configure SPORT0A TX (I2S) --- */
     eResult = adi_sport_ConfigData(handleSport0ATx,
         ADI_SPORT_DTYPE_SIGN_FILL, 31, false, false, false);
     if (eResult) { printf("SPDIF: ConfigData 0A TX failed rc=%d\n", (int)eResult); return 1; }
-    eResult = adi_sport_ConfigData(handleSport0BRx,
-        ADI_SPORT_DTYPE_SIGN_FILL, 31, false, false, false);
-    if (eResult) { printf("SPDIF: ConfigData 0B RX failed rc=%d\n", (int)eResult); return 1; }
 
-    /* SPORT0 clocks: external from PCG0 (I2S BCLK = 3.072 MHz).
-       TX drives on falling edge, RX samples on rising edge. */
     eResult = adi_sport_ConfigClock(handleSport0ATx,
         1u, /*useInternal*/false, /*bFallingEdge*/true, /*gated*/false);
     if (eResult) { printf("SPDIF: ConfigClock 0A TX failed rc=%d\n", (int)eResult); return 1; }
-    eResult = adi_sport_ConfigClock(handleSport0BRx,
-        1u, /*useInternal*/false, /*bFallingEdge*/false, /*gated*/false);
-    if (eResult) { printf("SPDIF: ConfigClock 0B RX failed rc=%d\n", (int)eResult); return 1; }
 
-    /* SPORT0 frame sync: external from PCG0 (48 kHz FS) */
     eResult = adi_sport_ConfigFrameSync(handleSport0ATx,
         31u, /*FSRequired*/true, /*internalFS*/false,
         /*dataFS*/false, /*activeHighFS*/true, /*lateFS*/false,
         /*edgeSensitive*/false);
     if (eResult) { printf("SPDIF: ConfigFS 0A TX failed rc=%d\n", (int)eResult); return 1; }
+
+    /* --- Configure SPORT0B RX (MC mode, 2-slot TDM = stereo) --- */
+    eResult = adi_sport_ConfigData(handleSport0BRx,
+        ADI_SPORT_DTYPE_SIGN_FILL, 31, false, false, false);
+    if (eResult) { printf("SPDIF: ConfigData 0B RX failed rc=%d\n", (int)eResult); return 1; }
+
+    eResult = adi_sport_ConfigClock(handleSport0BRx,
+        1u, /*useInternal*/false, /*bFallingEdge*/false, /*gated*/false);
+    if (eResult) { printf("SPDIF: ConfigClock 0B RX failed rc=%d\n", (int)eResult); return 1; }
+
+    /* Edge-sensitive FS: rising edge of FS starts the frame.
+       activeHighFS=true for standard FS polarity from SPDIF decoder. */
     eResult = adi_sport_ConfigFrameSync(handleSport0BRx,
         31u, /*FSRequired*/true, /*internalFS*/false,
         /*dataFS*/false, /*activeHighFS*/true, /*lateFS*/false,
-        /*edgeSensitive*/false);
+        /*edgeSensitive*/true);
     if (eResult) { printf("SPDIF: ConfigFS 0B RX failed rc=%d\n", (int)eResult); return 1; }
 
+    /* 2 TDM slots (L + R), frameDelay=0, DMA packed for interleaved L/R */
+    eResult = adi_sport_ConfigMC(handleSport0BRx,
+        /*frameDelay*/0, /*nNumSlots*/1u, /*windowSize*/0u, /*bEnableDMAPack*/true);
+    if (eResult) { printf("SPDIF: ConfigMC 0B RX failed rc=%d\n", (int)eResult); return 1; }
+
+    eResult = adi_sport_SelectChannel(handleSport0BRx, 0u, 1u);
+    if (eResult) { printf("SPDIF: SelectCh 0B RX failed rc=%d\n", (int)eResult); return 1; }
+
+    /* --- 4) Submit DMA descriptors --- */
     eResult = adi_sport_DMATransfer(handleSport0ATx,&spdifStream.Tx.dmaDescriptorPing,2 ,ADI_PDMA_DESCRIPTOR_LIST, ADI_SPORT_CHANNEL_PRIM);
     if (eResult) { printf("SPDIF: DMA 0A TX failed rc=%d\n", (int)eResult); return 1; }
     eResult = adi_sport_DMATransfer(handleSport0BRx,&spdifStream.Rx.dmaDescriptorPing,2 ,ADI_PDMA_DESCRIPTOR_LIST, ADI_SPORT_CHANNEL_PRIM);
     if (eResult) { printf("SPDIF: DMA 0B RX failed rc=%d\n", (int)eResult); return 1; }
 
+    /* --- 5) Register callbacks --- */
 	eResult = adi_sport_RegisterCallback(handleSport0BRx,
 										 SportCallback,
 										 handleSport0BRx);
@@ -418,11 +454,26 @@ int spdifSportInit(void)
 										 handleSport0ATx);
     if (eResult) { printf("SPDIF: Callback 0A TX failed rc=%d\n", (int)eResult); return 1; }
 
+    /* --- 6) Enable SPORT --- */
     eResult = adi_sport_Enable(handleSport0ATx,true);
     if (eResult) { printf("SPDIF: Enable 0A TX failed rc=%d\n", (int)eResult); return 1; }
 
     eResult = adi_sport_Enable(handleSport0BRx,true);
     if (eResult) { printf("SPDIF: Enable 0B RX failed rc=%d\n", (int)eResult); return 1; }
+
+    /* --- 7) Set SMODEIN=1 (I2S) on SPDIF TX encoder ---
+       SPORT0A TX is in I2S mode → serial output has a 1-BCLK padding bit (0)
+       before bit31. With SMODEIN=0 the encoder reads that padding as audio MSB,
+       making all output positive. SMODEIN=1 tells it to skip the padding.
+       Done via late register write (after SPORT is running) to avoid the
+       unhandled-interrupt crash that occurs when set via static config at init.
+       SMODEIN field: bits [8:6] of SPDIF_TX_CTL, value 1 = I2S. */
+    {
+        uint32_t previousTxCtl = *pREG_SPDIF0_TX_CTL;
+        *pREG_SPDIF0_TX_CTL = (previousTxCtl & ~(0x7u << 6)) | (0x1u << 6);
+        printf("SPDIF TX_CTL: 0x%08lX -> 0x%08lX (SMODEIN=1)\n",
+            (unsigned long)previousTxCtl, (unsigned long)*pREG_SPDIF0_TX_CTL);
+    }
 
     printf("SPDIF SPORT0 initialized OK\n");
     return 0;
