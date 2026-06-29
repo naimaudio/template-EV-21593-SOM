@@ -82,6 +82,18 @@ void AudioIO_applyConfiguration(void);
                                                                   Without SMODEIN, encoder reads bits[31:8]
                                                                   directly. ±1.0f → bits[31:8] = ±2^23 = 24-bit full scale. */
 
+/* ===== Master DAC output attenuation =====================================
+   Applied to ALL 12 DAC channels in the float domain (fillDACOutputFromGlobal).
+   *** WARNING: shipped attenuated at -24 dB for safe listening/test levels. ***
+   To change the output level, edit the value below (voltage gain = 10^(dB/20)):
+       0 dB  (full scale) : 1.0f
+      -6 dB             : 0.5011872f
+     -12 dB             : 0.2511886f
+     -24 dB (current)   : 0.0630957f
+     -42 dB             : 0.0079433f
+   SPDIF TX output is NOT affected by this (see SCALE_FLOAT_TO_SPDIF_TX). */
+#define DAC_OUTPUT_GAIN             (0.0630957f)              /* -24 dB = 10^(-24/20) */
+
 /* ===== Fill/drain functions (each stream independent) ==================== */
 void fillGlobalInputFromAN(void);
 void fillGlobalInputFromSpdif(void);

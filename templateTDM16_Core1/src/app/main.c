@@ -46,6 +46,11 @@ extern volatile uint32_t gBlockNumber;
 extern volatile uint32_t gTxRaceDetected;
 extern volatile uint32_t gSpdifTxRaceDetected;
 
+/* TX flip-desync counters (defined in io.c) — how often DMA-position selection
+   disagreed with the ISR-flipped writePtr (i.e. the old code's tear events). */
+extern volatile uint32_t gJackTxDesync;
+extern volatile uint32_t gSpdifTxDesync;
+
 /* ISR error detail counters (defined in sport.c) */
 extern volatile uint32_t gTxUnderflow;
 extern volatile uint32_t gFsErr;
@@ -151,7 +156,7 @@ int main(int argc, char *argv[])
        Pong = samples 0..127, Ping = samples 128..255. */
     {
         const float freq = 750.0f;
-        const float amp  = (float)0x20000000;  /* -12 dBFS */
+        const float amp  = (float)0x01000000;  /* ~-42 dBFS (safe level for the isolation test) */
         for (uint32_t f = 0; f < SAMPLES_PER_BLOCK; f++) {
             /* Pong: samples 0..127 (DMA reads this first) */
             float phase0 = 2.0f * 3.14159265f * freq * (float)f / 48000.0f;
@@ -335,16 +340,18 @@ int main(int argc, char *argv[])
     static uint32_t lastDmaVerifyDumpIndex = 0;
     for (;;)
     {
+#if !DIRECT_DMA_TEST
         processBlock();
         fillDACOutputFromGlobal();
         fillSpdifOutputFromGlobal();
+#endif
 
         /* One-time counter dump after ~30s (11250 ISR callbacks at 375/sec) */
-        if (!oneTimeDumpDone && gJackRxDone >= 11250u) {
+        if (!oneTimeDumpDone && gJackRxDone >= 5625u) {  /* ~15s: inside the bug window, single printf-free probe */
             oneTimeDumpDone = true;
             printf("=== ONE-TIME DUMP after %lu ISR cycles ===\n"
                    "GLITCH=%lu  RACE=%lu/%lu  DMA_ERR=%lu  blk=%lu\n"
-                   "ovr=%lu/%lu  err=%lu  fsErr=%lu  dmaErr=%lu  txUnder=%lu\n"
+                   "ovr=%lu/%lu  err=%lu  fsErr=%lu  dmaErr=%lu  txUnder=%lu  txRingUnder=%lu/%lu  desync=%lu/%lu\n"
                    "jRx=%u sRx=%u jTx=%u sTx=%u\n"
                    "JRx=%lu JTx=%lu SRx=%lu STx=%lu\n",
                 (unsigned long)gJackRxDone,
@@ -359,6 +366,10 @@ int main(int argc, char *argv[])
                 (unsigned long)gFsErr,
                 (unsigned long)gDmaErr,
                 (unsigned long)gTxUnderflow,
+                (unsigned long)jackTxRing.underrunCount,
+                (unsigned long)spdifTxRing.underrunCount,
+                (unsigned long)gJackTxDesync,
+                (unsigned long)gSpdifTxDesync,
                 (unsigned)circBuf_count(&jackRxRing),
                 (unsigned)circBuf_count(&spdifRxRing),
                 (unsigned)circBuf_count(&jackTxRing),

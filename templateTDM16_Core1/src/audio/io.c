@@ -2,6 +2,7 @@
 #include "audio/buffer.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/platform.h>   /* pREG_DMA10_ADDR_CUR (SPORT4A TX), pREG_DMA0_ADDR_CUR (SPORT0A TX) */
 
 #define BASE_ANALOG_INPUT_CHANNELS   4u
 #define BASE_DAC_OUTPUT_CHANNELS     12u
@@ -15,6 +16,38 @@ volatile SPDIF_STATE SPDIFState = SPDIF_DIGITAL_ON_OPTICAL_ON;
    If this counter climbs, DMA is reading partially-filled buffers. */
 volatile uint32_t gTxRaceDetected = 0;
 volatile uint32_t gSpdifTxRaceDetected = 0;
+
+/* TX flip-desync detector: counts how often the DMA-position-derived safe
+   buffer differs from the ISR-flipped writePtr — i.e. how often the old code
+   would have written the buffer the DMA was actively reading (the tear). */
+volatile uint32_t gJackTxDesync  = 0;
+volatile uint32_t gSpdifTxDesync = 0;
+
+/* ---- Robust TX buffer selection ----------------------------------------
+   The TX ping-pong is double-buffered: the DMA cycles ping<->pong in hardware,
+   while the ISR flips writePtr/readPtr to track it. Those two can desync (a
+   late/coalesced TX interrupt), after which the producer writes the buffer the
+   DMA is actively reading -> a moving tear (the intermittent ~6 Hz artifact).
+   Fix: choose the write buffer from the DMA's LIVE current-address register, so
+   we always write the buffer the DMA is NOT inside -- self-correcting even if
+   the flip desyncs. *desynced reports when this disagrees with writePtr.
+   Falls back to writePtr if the address matches neither buffer (no regression). */
+static inline uint32_t *pickSafeTxBuffer(const PingPong *pp,
+                                         volatile uint32_t *pDmaAddrCur,
+                                         uint32_t wordsPerBuf,
+                                         bool *desynced)
+{
+    const uintptr_t cur  = ((uintptr_t)*pDmaAddrCur) | 0x28000000u; /* normalize to uncached alias */
+    const uintptr_t ping = (uintptr_t)pp->ping;
+    const uintptr_t pong = (uintptr_t)pp->pong;
+    const uintptr_t span = (uintptr_t)wordsPerBuf * sizeof(uint32_t);
+    uint32_t *safe;
+    if      ((cur - ping) < span) safe = pp->pong;     /* DMA inside ping -> write pong */
+    else if ((cur - pong) < span) safe = pp->ping;     /* DMA inside pong -> write ping */
+    else                          safe = pp->writePtr; /* unmatched -> safe fallback */
+    *desynced = (safe != pp->writePtr);
+    return safe;
+}
 
 /* DMA buffer integrity verifier: after writing to the DMA buffer,
    read back samples and compare with expected (re-converted from ring).
@@ -143,11 +176,17 @@ void fillGlobalInputFromSpdif(void)
 
     /* SPDIF RX: MC mode captures raw I2S data from the decoder.
        bit31 = 0 always (I2S padding from decoder), bit30 = audio sign.
-       Shift left by 1 to move the real sign into bit31 position. */
+       Shift left by 1 to move the real sign into bit31 position.
+
+       L/R swap (i ^ 1): the recovered SPDIF frame-sync phase aligns AES3
+       subframe A (left) to capture slot 1 and subframe B (right) to slot 0,
+       so the raw DMA order is [R, L] per stereo frame. XOR-toggling bit 0
+       writes each word to the opposite channel slot, restoring canonical
+       [L, R] in the ring for all downstream consumers. */
     for (uint32_t i = 0; i < SPDIF_WORDS; i++) {
         int32_t correctedSample = (int32_t)(sourceBuffer[i] << 1);
         float normalizedSample = (float)correctedSample * SCALE_INT32_TO_FLOAT;
-        storeFloat((uint32_t *)&destinationSlot[i], normalizedSample);
+        storeFloat((uint32_t *)&destinationSlot[i ^ 1u], normalizedSample);
     }
 
     circBuf_commitWrite(&spdifRxRing);
@@ -160,13 +199,18 @@ void fillDACOutputFromGlobal(void)
     if (!circBuf_canRead(&jackTxRing)) return;
 
     const uint32_t          *sourceSlot = circBuf_readSlot(&jackTxRing);
-    volatile uint32_t       *destinationBuffer = (volatile uint32_t *)volatileReadWritePtr(&jackStream.Tx);
+
+    /* Choose the write buffer from the DMA's LIVE position (robust vs flip desync). */
+    bool txDesync = false;
+    uint32_t *safeBuffer = pickSafeTxBuffer(&jackStream.Tx, pREG_DMA10_ADDR_CUR, TX_WORDS, &txDesync);
+    if (txDesync) gJackTxDesync++;
+    volatile uint32_t       *destinationBuffer = (volatile uint32_t *)safeBuffer;
 
     /* Snapshot writePtr BEFORE the fill loop for race detection */
     uint32_t *writePtrBeforeFill = jackStream.Tx.writePtr;
 
     for (uint32_t i = 0; i < TX_WORDS; i++) {
-        float normalizedSample = loadFloat(&sourceSlot[i]);
+        float normalizedSample = loadFloat(&sourceSlot[i]) * DAC_OUTPUT_GAIN;
         destinationBuffer[i] = (uint32_t)floatToInt32Clamped(normalizedSample, SCALE_FLOAT_TO_INT32);
     }
 
@@ -181,7 +225,7 @@ void fillDACOutputFromGlobal(void)
        A mismatch means the uncached write produced wrong data. */
     for (uint32_t verifyIndex = 0; verifyIndex < TX_WORDS; verifyIndex += DMA_VERIFY_STRIDE) {
         float sourceFloatValue = loadFloat(&sourceSlot[verifyIndex]);
-        uint32_t expectedConvertedValue = (uint32_t)floatToInt32Clamped(sourceFloatValue, SCALE_FLOAT_TO_INT32);
+        uint32_t expectedConvertedValue = (uint32_t)floatToInt32Clamped(sourceFloatValue * DAC_OUTPUT_GAIN, SCALE_FLOAT_TO_INT32);
         uint32_t actualDmaBufferValue = destinationBuffer[verifyIndex];
 
         if (actualDmaBufferValue != expectedConvertedValue) {
@@ -212,7 +256,12 @@ void fillSpdifOutputFromGlobal(void)
     if (spdifStream.Tx.isFreshData)     return;
 
     const uint32_t          *sourceSlot = circBuf_readSlot(&spdifTxRing);
-    volatile uint32_t       *destinationBuffer = (volatile uint32_t *)volatileReadWritePtr(&spdifStream.Tx);
+
+    /* Choose the write buffer from the DMA's LIVE position (robust vs flip desync). */
+    bool spdifTxDesync = false;
+    uint32_t *safeBuffer = pickSafeTxBuffer(&spdifStream.Tx, pREG_DMA0_ADDR_CUR, SPDIF_WORDS, &spdifTxDesync);
+    if (spdifTxDesync) gSpdifTxDesync++;
+    volatile uint32_t       *destinationBuffer = (volatile uint32_t *)safeBuffer;
 
     /* Snapshot writePtr BEFORE fill for race detection */
     uint32_t *writePtrBeforeFill = spdifStream.Tx.writePtr;

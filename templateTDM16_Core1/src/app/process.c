@@ -181,14 +181,12 @@ void processBlock(void)
 #else
         /* Mode 0: SPDIF IN → DAC 1/2 and SPDIF OUT */
         {
-            /* DAC 1/2: SPDIF input (or analog fallback if no SPDIF) */
-            if (spdifInRaw) {
-                dacOutput[OUT_DAC01] = spdifInputLeft;
-                dacOutput[OUT_DAC02] = spdifInputRight;
-            } else {
-                dacOutput[OUT_DAC01] = analogInputLeft;
-                dacOutput[OUT_DAC02] = analogInputRight;
-            }
+            /* DAC 1/2: sum of analog AN1/2 + AN3/4 + SPDIF IN L/R.
+               spdifInputLeft/Right are 0.0f until the first SPDIF block arrives,
+               so this degrades gracefully to AN1+AN3 / AN2+AN4 with no SPDIF.
+               NOTE: a 3-way sum can exceed ±1.0 → floatToInt32Clamped hard-clips. */
+            dacOutput[OUT_DAC01] = analogInputLeft  + analogInput3 + spdifInputLeft;
+            dacOutput[OUT_DAC02] = analogInputRight + analogInput4 + spdifInputRight;
 
             /* DAC 3/4: analog passthrough */
             dacOutput[OUT_DAC03] = analogInput3;

@@ -12,6 +12,27 @@ This project provides a **framework for unifying all audio I/O streams**—inclu
 - **Flexible Routing**: Easily map any input channel to any output channel in the processing stage.
 - **Scalable Design**: Supports adding more I/O interfaces with minimal changes.
 
+## ⚠️ DAC Output Level (attenuated by default)
+The analog **DAC outputs ship attenuated to −24 dB** for safe listening/test levels.
+This does **not** affect the SPDIF Tx output. The attenuation is a single master gain
+applied to all 12 DAC channels, defined in [`src/audio/io.h`](templateTDM16_Core1/src/audio/io.h):
+
+```c
+#define DAC_OUTPUT_GAIN  (0.0630957f)   // -24 dB
+```
+
+To change the level, edit that macro (voltage gain = 10^(dB/20)):
+
+| Level             | Value         |
+|-------------------|---------------|
+| 0 dB (full scale) | `1.0f`        |
+| −6 dB             | `0.5011872f`  |
+| −12 dB            | `0.2511886f`  |
+| −24 dB (current)  | `0.0630957f`  |
+| −42 dB            | `0.0079433f`  |
+
+It is applied in `fillDACOutputFromGlobal()` ([`src/audio/io.c`](templateTDM16_Core1/src/audio/io.c)).
+
 ## Architecture
 ```
 [ ADC (SPORT4B) ]   [ SPDIF Rx (SPORT0B) ]

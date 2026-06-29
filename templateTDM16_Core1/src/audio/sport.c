@@ -137,11 +137,16 @@ void SportCallback(void *pAppHandle, uint32_t event, void *pArg)
         break;
     case ADI_SPORT_EVENT_TX_BUFFER_PROCESSED:
         if (pAppHandle == handleSport4ATx) {
+            /* isFreshData still false here = fillDAC did NOT refill since the last
+               flip → the buffer being promoted is stale, DMA repeats it (audible
+               glitch). The committed code did this silently; now we count it. */
+            if (!jackStream.Tx.isFreshData) jackTxRing.underrunCount++;
             flipPingPong(&jackStream.Tx);
             jackStream.Tx.isFreshData = false;
             gJackTxDone++;
         }
         if (pAppHandle == handleSport0ATx) {
+            if (!spdifStream.Tx.isFreshData) spdifTxRing.underrunCount++;
             flipPingPong(&spdifStream.Tx);
             spdifStream.Tx.isFreshData = false;
             gSpdifTxDone++;
